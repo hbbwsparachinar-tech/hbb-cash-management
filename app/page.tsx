@@ -2,197 +2,177 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-type Transaction = {
-  id: number;
-  reference: string;
-  date: string;
-  description: string;
-  department: string;
-  type: "Receipt" | "Payment";
-  method: string;
-  amount: number;
-  status: "Cleared" | "Pending" | "Flagged";
-};
+type TxType = "Cash In" | "Cash Out";
+type Transaction = { id:number; voucher:string; date:string; type:TxType; category:string; amount:number; from:string; to:string; description:string };
+type Location = { id:number; name:string; openingBalance:number };
+type Settings = { hospitalName:string; currencySymbol:string };
 
-type Approval = {
-  id: number;
-  request: string;
-  department: string;
-  requester: string;
-  amount: number;
-  age: string;
-};
-
-const demoTransactions: Transaction[] = [
-  { id: 1, reference: "RC-240801", date: "2026-08-02", description: "Patient counter collections", department: "Outpatient", type: "Receipt", method: "Cash", amount: 382450, status: "Cleared" },
-  { id: 2, reference: "RC-240802", date: "2026-08-02", description: "Insurance remittance — Jubilee", department: "Insurance", type: "Receipt", method: "Bank", amount: 714200, status: "Cleared" },
-  { id: 3, reference: "PV-240319", date: "2026-08-02", description: "Emergency medicines restock", department: "Pharmacy", type: "Payment", method: "Bank", amount: 246800, status: "Pending" },
-  { id: 4, reference: "PV-240318", date: "2026-08-01", description: "CT scanner preventive maintenance", department: "Radiology", type: "Payment", method: "Cheque", amount: 185000, status: "Flagged" },
-  { id: 5, reference: "RC-240799", date: "2026-08-01", description: "Inpatient discharge settlements", department: "Inpatient", type: "Receipt", method: "Card", amount: 493600, status: "Cleared" },
-  { id: 6, reference: "PV-240316", date: "2026-08-01", description: "Oxygen cylinder supply", department: "ICU", type: "Payment", method: "Bank", amount: 128400, status: "Cleared" },
+const cashInCategories = ["Blood","Donation","Hospital","Lab 1","Lab 2","Pharma","Radiology","Transport","Azadar Clinic","Vaccine","ECG","Small Industry"];
+const cashOutCategories = [...cashInCategories,"Education","Food & Refreshment","Functions","Camps","Investment","Legal Charges","Free Medication","Packages","Printing","Projects","Ramadan / Food Packages","Repair & Maintenance","Special Persons Payment","Utilities","Free Vaccines","Salaries"];
+const initialLocations: Location[] = [
+  { id:1, name:"Main Cash", openingBalance:1250000 }, { id:2, name:"Bank Account", openingBalance:3200000 },
+  { id:3, name:"Petty Cash", openingBalance:85000 }, { id:4, name:"Hospital Cash Counter", openingBalance:150000 },
+  { id:5, name:"Pharmacy Cash Counter", openingBalance:120000 }, { id:6, name:"Lab Cash Counter", openingBalance:90000 },
+  { id:7, name:"Transport Cash", openingBalance:65000 },
+];
+const initialTransactions: Transaction[] = [
+  { id:1,voucher:"HBB-260805-01",date:"2026-08-05",type:"Cash In",category:"Hospital",amount:185000,from:"Patient collections",to:"Hospital Cash Counter",description:"Morning counter collection" },
+  { id:2,voucher:"HBB-260805-02",date:"2026-08-05",type:"Cash In",category:"Pharma",amount:96500,from:"Pharmacy sales",to:"Pharmacy Cash Counter",description:"Daily cash sales" },
+  { id:3,voucher:"HBB-260805-03",date:"2026-08-05",type:"Cash Out",category:"Utilities",amount:68500,from:"Bank Account",to:"K-Electric",description:"Electricity bill" },
+  { id:4,voucher:"HBB-260804-06",date:"2026-08-04",type:"Cash In",category:"Donation",amount:250000,from:"Community donor",to:"Main Cash",description:"General hospital donation" },
+  { id:5,voucher:"HBB-260804-07",date:"2026-08-04",type:"Cash Out",category:"Free Medication",amount:124000,from:"Main Cash",to:"Al-Shifa Medical Store",description:"Medicines for welfare patients" },
+  { id:6,voucher:"HBB-260803-04",date:"2026-08-03",type:"Cash In",category:"Lab 1",amount:118750,from:"Lab collections",to:"Lab Cash Counter",description:"Lab test receipts" },
 ];
 
-const demoApprovals: Approval[] = [
-  { id: 1, request: "Dialysis consumables", department: "Nephrology", requester: "Dr. Nadia Khan", amount: 284000, age: "18 min" },
-  { id: 2, request: "Generator fuel advance", department: "Facilities", requester: "Ahsan Malik", amount: 165000, age: "46 min" },
-  { id: 3, request: "Surgical implant payment", department: "Operating Theatre", requester: "Dr. Faraz Ali", amount: 438500, age: "2 hr" },
-];
+const today = new Date().toISOString().slice(0,10);
+const money = (value:number, symbol="Rs.") => `${symbol} ${new Intl.NumberFormat("en-PK",{maximumFractionDigits:0}).format(value)}`;
+const dateLabel = (date:string) => new Date(`${date}T00:00:00`).toLocaleDateString("en-PK",{day:"2-digit",month:"short",year:"numeric"});
+const icon:Record<string,string> = { Dashboard:"⌂", "Cash In":"↓", "Cash Out":"↑", Transactions:"↔", "Cash Locations":"⌖", Reports:"▥", Settings:"⚙" };
+const navItems = Object.keys(icon);
 
-const money = (value: number) =>
-  new Intl.NumberFormat("en-PK", { style: "currency", currency: "PKR", maximumFractionDigits: 0 }).format(value).replace("PKR", "Rs");
+export default function Home(){
+  const [active,setActive] = useState("Dashboard");
+  const [transactions,setTransactions] = useState<Transaction[]>(initialTransactions);
+  const [locations,setLocations] = useState<Location[]>(initialLocations);
+  const [settings,setSettings] = useState<Settings>({hospitalName:"HBB Hospital",currencySymbol:"Rs."});
+  const [menuOpen,setMenuOpen] = useState(false);
+  const [notice,setNotice] = useState("");
+  const [loading,setLoading] = useState(true);
 
-const compactMoney = (value: number) => {
-  if (value >= 1_000_000) return `Rs ${(value / 1_000_000).toFixed(2)}m`;
-  return `Rs ${(value / 1_000).toFixed(0)}k`;
-};
+  useEffect(()=>{ fetch("/api/finance").then(r=>r.ok?r.json():Promise.reject()).then(data=>{
+    if(data.transactions) setTransactions(data.transactions);
+    if(data.locations) setLocations(data.locations);
+    if(data.settings) setSettings(data.settings);
+  }).catch(()=>undefined).finally(()=>setLoading(false)); },[]);
 
-const navItems = ["Overview", "Transactions", "Reconciliation", "Approvals", "Reports"];
+  function flash(message:string){ setNotice(message); window.setTimeout(()=>setNotice(""),2600); }
+  function go(page:string){ setActive(page); setMenuOpen(false); window.scrollTo({top:0,behavior:"smooth"}); }
 
-export default function Home() {
-  const [active, setActive] = useState("Overview");
-  const [transactions, setTransactions] = useState<Transaction[]>(demoTransactions);
-  const [approvals, setApprovals] = useState<Approval[]>(demoApprovals);
-  const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState("All types");
-  const [statusFilter, setStatusFilter] = useState("All statuses");
-  const [modalOpen, setModalOpen] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [menuOpen, setMenuOpen] = useState(false);
-
-  useEffect(() => {
-    fetch("/api/finance")
-      .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((data) => {
-        if (data.transactions?.length) setTransactions(data.transactions);
-        if (data.approvals?.length) setApprovals(data.approvals);
-      })
-      .catch(() => undefined);
-  }, []);
-
-  const filtered = useMemo(() => transactions.filter((item) => {
-    const haystack = `${item.reference} ${item.description} ${item.department}`.toLowerCase();
-    return haystack.includes(search.toLowerCase()) &&
-      (typeFilter === "All types" || item.type === typeFilter) &&
-      (statusFilter === "All statuses" || item.status === statusFilter);
-  }), [transactions, search, typeFilter, statusFilter]);
-
-  const totalBalance = 4_820_000;
-  const todayInflow = transactions.filter((t) => t.type === "Receipt" && t.date === "2026-08-02").reduce((s, t) => s + t.amount, 0);
-  const todayOutflow = transactions.filter((t) => t.type === "Payment" && t.date === "2026-08-02").reduce((s, t) => s + t.amount, 0);
-
-  const flash = (message: string) => {
-    setNotice(message);
-    window.setTimeout(() => setNotice(""), 2600);
-  };
-
-  async function addTransaction(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const payload = {
-      description: String(form.get("description") || ""),
-      department: String(form.get("department") || ""),
-      type: String(form.get("type") || "Receipt"),
-      method: String(form.get("method") || "Cash"),
-      amount: Number(form.get("amount") || 0),
-    };
-    const optimistic: Transaction = {
-      id: Date.now(), reference: `${payload.type === "Receipt" ? "RC" : "PV"}-${String(Date.now()).slice(-6)}`,
-      date: "2026-08-02", description: payload.description, department: payload.department,
-      type: payload.type as Transaction["type"], method: payload.method, amount: payload.amount, status: "Pending",
-    };
-    setTransactions((items) => [optimistic, ...items]);
-    setModalOpen(false);
-    flash("Transaction recorded successfully");
-    try {
-      const response = await fetch("/api/finance", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
-      if (response.ok) {
-        const { transaction } = await response.json();
-        setTransactions((items) => items.map((item) => item.id === optimistic.id ? transaction : item));
-      }
-    } catch { /* The optimistic record remains visible if the preview database is unavailable. */ }
+  async function saveTransaction(tx:Omit<Transaction,"id">, id?:number){
+    const duplicate=transactions.some(t=>t.voucher.toLowerCase()===tx.voucher.toLowerCase()&&t.id!==id);
+    if(duplicate){ flash("That voucher / bill number already exists"); return false; }
+    if(id){ setTransactions(items=>items.map(t=>t.id===id?{...tx,id}:t)); }
+    else { setTransactions(items=>[{...tx,id:Date.now()},...items]); }
+    try{
+      const response=await fetch("/api/finance",{method:id?"PUT":"POST",headers:{"content-type":"application/json"},body:JSON.stringify({kind:"transaction",id,...tx})});
+      if(response.ok){ const data=await response.json(); if(!id&&data.transaction) setTransactions(items=>items.map(t=>t.id>1e12?data.transaction:t)); }
+    }catch{}
+    flash(id?"Transaction updated":"Transaction saved successfully"); return true;
   }
 
-  async function approve(id: number) {
-    setApprovals((items) => items.filter((item) => item.id !== id));
-    flash("Payment approved and sent to treasury");
-    try { await fetch("/api/finance", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) }); } catch { }
+  async function deleteTransaction(id:number){
+    if(!window.confirm("Delete this transaction? This action cannot be undone.")) return;
+    setTransactions(items=>items.filter(t=>t.id!==id));
+    try{ await fetch(`/api/finance?kind=transaction&id=${id}`,{method:"DELETE"}); }catch{}
+    flash("Transaction deleted");
   }
 
-  function exportLedger() {
-    const rows = [["Reference", "Date", "Description", "Department", "Type", "Method", "Amount", "Status"], ...filtered.map((t) => [t.reference, t.date, t.description, t.department, t.type, t.method, String(t.amount), t.status])];
-    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    link.download = "hospital-cash-ledger.csv";
-    link.click();
-    URL.revokeObjectURL(link.href);
-    flash("Ledger exported as CSV");
-  }
+  const locationStats=useMemo(()=>locations.map(location=>{
+    const received=transactions.filter(t=>t.type==="Cash In"&&t.to===location.name).reduce((s,t)=>s+t.amount,0);
+    const paid=transactions.filter(t=>t.type==="Cash Out"&&t.from===location.name).reduce((s,t)=>s+t.amount,0);
+    return {...location,received,paid,balance:location.openingBalance+received-paid};
+  }),[locations,transactions]);
+  const totalAvailable=locationStats.reduce((s,l)=>s+l.balance,0);
 
-  return (
-    <main className="app-shell">
-      <aside className={`sidebar ${menuOpen ? "open" : ""}`}>
-        <div className="brand"><span className="brand-mark">H+</span><span><strong>Horizon</strong><small>Hospital Finance</small></span></div>
-        <nav aria-label="Main navigation">
-          <p className="nav-label">Workspace</p>
-          {navItems.map((item) => <button key={item} className={active === item ? "active" : ""} onClick={() => { setActive(item); setMenuOpen(false); }}><span>{item === "Overview" ? "⌂" : item === "Transactions" ? "↔" : item === "Reconciliation" ? "✓" : item === "Approvals" ? "◷" : "▥"}</span>{item}{item === "Approvals" && approvals.length > 0 && <b>{approvals.length}</b>}</button>)}
-        </nav>
-        <div className="sidebar-card"><span className="pulse-dot"/><p>Bank sync is healthy</p><small>Last checked 4 minutes ago</small></div>
-        <div className="user-card"><span className="avatar">SA</span><span><strong>Sarah Ahmed</strong><small>Finance Manager</small></span><button aria-label="Account options">•••</button></div>
-      </aside>
-
-      <section className="content">
-        <header className="topbar">
-          <button className="menu-button" aria-label="Toggle menu" onClick={() => setMenuOpen(!menuOpen)}>☰</button>
-          <div><p>Finance workspace</p><strong>Sunday, 2 August 2026</strong></div>
-          <div className="top-actions"><button className="icon-button" aria-label="Notifications">♢<span /></button><button className="secondary-button" onClick={exportLedger}>⇩ Export</button><button className="primary-button" onClick={() => setModalOpen(true)}>＋ New transaction</button></div>
-        </header>
-
-        <div className="page">
-          <div className="page-heading"><div><span className="eyebrow">CASH COMMAND CENTER</span><h1>{active === "Overview" ? "Good morning, Sarah" : active}</h1><p>{active === "Overview" ? "Here’s your hospital’s cash position and what needs attention today." : `Review and manage hospital ${active.toLowerCase()} from one workspace.`}</p></div><div className="live-chip"><span className="pulse-dot"/>Live data</div></div>
-
-          {active === "Overview" && <>
-            <section className="metric-grid" aria-label="Cash summary">
-              <article className="metric-card featured"><div className="metric-top"><span>Available cash</span><i>All accounts</i></div><strong>{compactMoney(totalBalance)}</strong><div className="metric-foot"><span className="up">↑ 8.4%</span><small>vs. last month</small><div className="mini-bars"><i/><i/><i/><i/><i/><i/></div></div></article>
-              <article className="metric-card"><div className="metric-icon green">↙</div><span>Today’s inflow</span><strong>{compactMoney(todayInflow || 1_240_000)}</strong><small>Patient + insurance receipts</small><div className="progress"><i style={{ width: "78%" }}/></div></article>
-              <article className="metric-card"><div className="metric-icon coral">↗</div><span>Today’s outflow</span><strong>{compactMoney(todayOutflow || 780_000)}</strong><small>Payments and operating costs</small><div className="progress coral"><i style={{ width: "54%" }}/></div></article>
-              <article className="metric-card"><div className="metric-icon amber">⌁</div><span>Receivables</span><strong>Rs 12.6m</strong><small><b>Rs 2.1m</b> overdue 30+ days</small><div className="progress amber"><i style={{ width: "67%" }}/></div></article>
-            </section>
-
-            <section className="overview-grid">
-              <article className="panel cash-flow"><div className="panel-head"><div><h2>Cash flow</h2><p>Collections and payments across the last 7 days</p></div><select aria-label="Cash flow period"><option>Last 7 days</option><option>Last 30 days</option></select></div>
-                <div className="chart-legend"><span><i className="green-dot"/>Inflow <strong>Rs 6.82m</strong></span><span><i className="blue-dot"/>Outflow <strong>Rs 4.31m</strong></span></div>
-                <div className="chart"><div className="y-labels"><span>1.5m</span><span>1.0m</span><span>500k</span><span>0</span></div><div className="bars">{[[64,38],[78,48],[56,32],[88,58],[70,44],[96,61],[81,50]].map((pair, i) => <div className="bar-day" key={i}><div className="bar-pair"><i className="in" style={{height:`${pair[0]}%`}}/><i className="out" style={{height:`${pair[1]}%`}}/></div><span>{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][i]}</span></div>)}</div></div>
-              </article>
-              <article className="panel attention"><div className="panel-head"><div><h2>Needs attention</h2><p>Items requiring your review</p></div><span className="count-chip">{approvals.length + 2}</span></div>
-                <button onClick={() => setActive("Approvals")}><span className="attention-icon amber">◷</span><span><strong>{approvals.length} payments awaiting approval</strong><small>Highest request: Rs 438,500</small></span><b>›</b></button>
-                <button onClick={() => setActive("Reconciliation")}><span className="attention-icon coral">!</span><span><strong>2 unmatched bank entries</strong><small>Total variance: Rs 86,400</small></span><b>›</b></button>
-                <button onClick={() => setActive("Transactions")}><span className="attention-icon blue">⌁</span><span><strong>7 insurance claims overdue</strong><small>Outstanding: Rs 2.1m</small></span><b>›</b></button>
-                <button className="review-all" onClick={() => setActive("Approvals")}>Review all items →</button>
-              </article>
-            </section>
-
-            <section className="panel department-panel"><div className="panel-head"><div><h2>Department cash position</h2><p>Today’s movement by hospital unit</p></div><button className="text-button" onClick={() => setActive("Reports")}>View full report →</button></div><div className="department-row"><div><span className="dept-icon opd">OP</span><span><strong>Outpatient</strong><small>418 receipts</small></span></div><strong>Rs 1.42m</strong><span className="positive">+12.6%</span><div><span className="dept-icon inp">IP</span><span><strong>Inpatient</strong><small>86 discharges</small></span></div><strong>Rs 2.18m</strong><span className="positive">+6.8%</span><div><span className="dept-icon pha">RX</span><span><strong>Pharmacy</strong><small>1,204 orders</small></span></div><strong>Rs 842k</strong><span className="negative">−3.2%</span></div></section>
-          </>}
-
-          {active === "Transactions" && <section className="panel data-panel"><div className="toolbar"><label className="search-box">⌕<input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search reference, department, or description" /></label><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option>All types</option><option>Receipt</option><option>Payment</option></select><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option>All statuses</option><option>Cleared</option><option>Pending</option><option>Flagged</option></select></div><TransactionTable rows={filtered}/></section>}
-
-          {active === "Approvals" && <section className="approval-grid">{approvals.length ? approvals.map((item) => <article className="approval-card" key={item.id}><div className="approval-top"><span className="dept-icon inp">{item.department.slice(0,2).toUpperCase()}</span><span className="age-chip">Waiting {item.age}</span></div><p>{item.department}</p><h2>{item.request}</h2><strong>{money(item.amount)}</strong><small>Requested by {item.requester}</small><div><button className="secondary-button" onClick={() => flash("Request returned for clarification")}>Request details</button><button className="primary-button" onClick={() => approve(item.id)}>Approve</button></div></article>) : <div className="empty-state"><span>✓</span><h2>All caught up</h2><p>There are no payments waiting for approval.</p></div>}</section>}
-
-          {active === "Reconciliation" && <section className="panel reconcile-panel"><div className="reconcile-summary"><span className="ring">94%</span><div><h2>Bank reconciliation</h2><p>78 of 83 entries matched for August 2026</p></div><button className="primary-button" onClick={() => flash("Auto-match completed — 3 new entries matched")}>Run auto-match</button></div><div className="match-list"><div><span className="attention-icon coral">!</span><span><strong>Bank transfer — MEDSUPPLY LTD</strong><small>02 Aug · Bank statement only</small></span><b>Rs 64,800</b><button onClick={() => flash("Matching panel opened")}>Find match</button></div><div><span className="attention-icon amber">?</span><span><strong>Cheque 008831</strong><small>01 Aug · Ledger only</small></span><b>Rs 21,600</b><button onClick={() => flash("Matching panel opened")}>Find match</button></div></div></section>}
-
-          {active === "Reports" && <section className="report-grid"><article className="panel report-hero"><span className="eyebrow">MONTH TO DATE</span><h2>Net cash improved by 18.4%</h2><p>Higher outpatient collections offset increased pharmacy and facilities spending.</p><div className="report-number"><strong>Rs 8.42m</strong><span>Net cash movement</span></div><button className="primary-button" onClick={exportLedger}>Download management report</button></article>{["Daily collection summary","Department variance","Insurance aging","Payment register"].map((name, i) => <button className="report-card" key={name} onClick={exportLedger}><span>{["▤","▥","◷","↗"][i]}</span><div><strong>{name}</strong><small>Updated today at 09:{15 + i * 8}</small></div><b>⇩</b></button>)}</section>}
-
-          {active !== "Transactions" && active !== "Overview" && <section className="panel recent-panel"><div className="panel-head"><div><h2>Recent transactions</h2><p>Latest activity across hospital accounts</p></div><button className="text-button" onClick={() => setActive("Transactions")}>View ledger →</button></div><TransactionTable rows={transactions.slice(0,4)}/></section>}
-        </div>
-      </section>
-
-      {modalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(e) => { if (e.currentTarget === e.target) setModalOpen(false); }}><form className="modal" onSubmit={addTransaction}><div className="modal-head"><div><span className="eyebrow">NEW ENTRY</span><h2>Record transaction</h2></div><button type="button" aria-label="Close" onClick={() => setModalOpen(false)}>×</button></div><label>Description<input name="description" required placeholder="e.g. Lab counter collections" autoFocus /></label><div className="form-row"><label>Department<select name="department"><option>Outpatient</option><option>Inpatient</option><option>Emergency</option><option>Pharmacy</option><option>Radiology</option><option>Facilities</option></select></label><label>Transaction type<select name="type"><option>Receipt</option><option>Payment</option></select></label></div><div className="form-row"><label>Amount (PKR)<input name="amount" type="number" min="1" required placeholder="0" /></label><label>Payment method<select name="method"><option>Cash</option><option>Bank</option><option>Card</option><option>Cheque</option></select></label></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModalOpen(false)}>Cancel</button><button type="submit" className="primary-button">Save transaction</button></div></form></div>}
-      {notice && <div className="toast"><span>✓</span>{notice}</div>}
-    </main>
-  );
+  return <main className="app-shell">
+    <aside className={`sidebar ${menuOpen?"open":""}`}>
+      <div className="brand"><span className="brand-mark">H+</span><span><strong>{settings.hospitalName}</strong><small>Cash Management</small></span></div>
+      <nav aria-label="Main navigation">{navItems.map(item=><button key={item} className={active===item?"active":""} onClick={()=>go(item)}><span>{icon[item]}</span>{item}</button>)}</nav>
+      <div className="sidebar-help"><span>i</span><div><strong>Simple cash book</strong><small>All balances update automatically.</small></div></div>
+      <footer><span className="status-dot"/> Data saved securely</footer>
+    </aside>
+    {menuOpen&&<button className="mobile-scrim" aria-label="Close navigation" onClick={()=>setMenuOpen(false)}/>}
+    <section className="content">
+      <header className="topbar"><button className="menu-button" onClick={()=>setMenuOpen(!menuOpen)} aria-label="Open navigation">☰</button><div><small>Hospital Cash Management</small><strong>{active}</strong></div><div className="top-date"><span>Today</span><strong>{new Date().toLocaleDateString("en-PK",{day:"2-digit",month:"long",year:"numeric"})}</strong></div></header>
+      <div className="page">
+        {loading&&<div className="loading-line"/>}
+        {active==="Dashboard"&&<Dashboard transactions={transactions} locationStats={locationStats} settings={settings} go={go}/>}
+        {active==="Cash In"&&<EntryPage type="Cash In" locations={locations} settings={settings} onSave={saveTransaction} go={go}/>}
+        {active==="Cash Out"&&<EntryPage type="Cash Out" locations={locations} settings={settings} onSave={saveTransaction} go={go}/>}
+        {active==="Transactions"&&<TransactionsPage transactions={transactions} locations={locations} settings={settings} onSave={saveTransaction} onDelete={deleteTransaction}/>}
+        {active==="Cash Locations"&&<LocationsPage locations={locations} setLocations={setLocations} stats={locationStats} settings={settings} flash={flash}/>}
+        {active==="Reports"&&<Reports transactions={transactions} locationStats={locationStats} settings={settings}/>}
+        {active==="Settings"&&<SettingsPage settings={settings} setSettings={setSettings} flash={flash}/>}
+      </div>
+    </section>
+    {notice&&<div className="toast"><b>✓</b>{notice}</div>}
+  </main>;
 }
 
-function TransactionTable({ rows }: { rows: Transaction[] }) {
-  return <div className="table-wrap"><table><thead><tr><th>Reference</th><th>Description</th><th>Department</th><th>Method</th><th>Amount</th><th>Status</th></tr></thead><tbody>{rows.map((item) => <tr key={item.id}><td><strong>{item.reference}</strong><small>{new Date(`${item.date}T00:00:00`).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })}</small></td><td>{item.description}</td><td>{item.department}</td><td>{item.method}</td><td className={item.type === "Receipt" ? "amount-in" : "amount-out"}>{item.type === "Receipt" ? "+" : "−"}{money(item.amount)}</td><td><span className={`status ${item.status.toLowerCase()}`}>{item.status}</span></td></tr>)}</tbody></table>{rows.length === 0 && <div className="empty-table">No transactions match your filters.</div>}</div>;
+function PageHeading({eyebrow,title,description,action}:{eyebrow:string;title:string;description:string;action?:React.ReactNode}){
+  return <div className="page-heading"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>;
 }
+
+function Dashboard({transactions,locationStats,settings,go}:{transactions:Transaction[];locationStats:Array<Location&{received:number;paid:number;balance:number}>;settings:Settings;go:(p:string)=>void}){
+  const [from,setFrom]=useState(today.slice(0,8)+"01"), [to,setTo]=useState(today);
+  const filtered=transactions.filter(t=>t.date>=from&&t.date<=to);
+  const cashIn=filtered.filter(t=>t.type==="Cash In").reduce((s,t)=>s+t.amount,0), cashOut=filtered.filter(t=>t.type==="Cash Out").reduce((s,t)=>s+t.amount,0);
+  const todayIn=transactions.filter(t=>t.type==="Cash In"&&t.date===today).reduce((s,t)=>s+t.amount,0), todayOut=transactions.filter(t=>t.type==="Cash Out"&&t.date===today).reduce((s,t)=>s+t.amount,0);
+  const available=locationStats.reduce((s,l)=>s+l.balance,0);
+  const summarize=(type:TxType)=>Object.entries(filtered.filter(t=>t.type===type).reduce<Record<string,number>>((a,t)=>{a[t.category]=(a[t.category]||0)+t.amount;return a;},{})).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const inSummary=summarize("Cash In"), outSummary=summarize("Cash Out");
+  return <>
+    <PageHeading eyebrow="CASH OVERVIEW" title="Dashboard" description="A clear view of cash received, paid, and currently available." action={<div className="date-filter"><label>From<input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label>To<input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label></div>}/>
+    <section className="metrics">
+      <Metric label="Total Cash In" value={money(cashIn,settings.currencySymbol)} tone="green" icon="↓" note="Selected period"/>
+      <Metric label="Total Cash Out" value={money(cashOut,settings.currencySymbol)} tone="red" icon="↑" note="Selected period"/>
+      <Metric label="Available Cash" value={money(available,settings.currencySymbol)} tone="blue" icon="≋" note="Across all locations" featured/>
+      <Metric label="Today’s Cash In" value={money(todayIn,settings.currencySymbol)} tone="green" icon="＋" note={dateLabel(today)}/>
+      <Metric label="Today’s Cash Out" value={money(todayOut,settings.currencySymbol)} tone="red" icon="−" note={dateLabel(today)}/>
+    </section>
+    <section className="dashboard-grid">
+      <article className="panel recent"><PanelHead title="Recent Transactions" subtitle="Latest cash activity" action={<button className="link-button" onClick={()=>go("Transactions")}>View all →</button>}/><TransactionTable rows={filtered.slice(0,6)} symbol={settings.currencySymbol} compact/></article>
+      <article className="panel balance-panel"><PanelHead title="Cash by Location" subtitle="Current available balance" action={<button className="link-button" onClick={()=>go("Cash Locations")}>Manage →</button>}/><div className="location-list">{locationStats.map((l,i)=><div key={l.id}><span className={`location-icon c${i%4}`}>{l.name.slice(0,2).toUpperCase()}</span><span><strong>{l.name}</strong><small>{Math.round(l.balance/Math.max(available,1)*100)}% of available cash</small></span><b>{money(l.balance,settings.currencySymbol)}</b></div>)}</div></article>
+    </section>
+    <section className="summary-grid"><SummaryCard title="Cash In by Category" data={inSummary} total={cashIn} symbol={settings.currencySymbol} tone="green"/><SummaryCard title="Cash Out by Category" data={outSummary} total={cashOut} symbol={settings.currencySymbol} tone="blue"/></section>
+  </>;
+}
+
+function Metric({label,value,tone,icon,note,featured=false}:{label:string;value:string;tone:string;icon:string;note:string;featured?:boolean}){ return <article className={`metric ${featured?"featured":""}`}><span className={`metric-icon ${tone}`}>{icon}</span><small>{label}</small><strong>{value}</strong><p>{note}</p></article>; }
+function PanelHead({title,subtitle,action}:{title:string;subtitle:string;action?:React.ReactNode}){ return <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div>{action}</div>; }
+function SummaryCard({title,data,total,symbol,tone}:{title:string;data:[string,number][];total:number;symbol:string;tone:string}){return <article className="panel summary-card"><PanelHead title={title} subtitle="Selected reporting period"/><div className="summary-bars">{data.length?data.map(([name,value])=><div key={name}><span><strong>{name}</strong><b>{money(value,symbol)}</b></span><i><em className={tone} style={{width:`${Math.max(7,value/Math.max(total,1)*100)}%`}}/></i></div>):<Empty message="No transactions in this period."/>}</div></article>}
+
+function EntryPage({type,locations,settings,onSave,go}:{type:TxType;locations:Location[];settings:Settings;onSave:(tx:Omit<Transaction,"id">)=>Promise<boolean>;go:(p:string)=>void}){
+  const categories=type==="Cash In"?cashInCategories:cashOutCategories;
+  async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const form=e.currentTarget,fd=new FormData(form);const ok=await onSave({voucher:String(fd.get("voucher")).trim(),date:String(fd.get("date")),type,category:String(fd.get("category")),amount:Number(fd.get("amount")),from:String(fd.get("from")).trim(),to:String(fd.get("to")).trim(),description:String(fd.get("description")).trim()});if(ok) form.reset();}
+  return <>
+    <PageHeading eyebrow={type.toUpperCase()} title={`Record ${type}`} description={type==="Cash In"?"Record cash received and where it was deposited.":"Record a payment and the cash location it was paid from."}/>
+    <section className="form-layout"><form className="panel entry-form" onSubmit={submit}><div className="form-title"><span className={type==="Cash In"?"green-bg":"red-bg"}>{type==="Cash In"?"↓":"↑"}</span><div><h2>{type} Entry</h2><p>Fields marked with * are required.</p></div></div>
+      <div className="form-grid"><label>Voucher / Bill Number *<input name="voucher" required placeholder="Enter hard-copy bill number"/></label><label>Date *<input name="date" type="date" required defaultValue={today}/></label><label className="wide">{type==="Cash In"?"Category / Department":"Expense Category"} *<select name="category" required defaultValue=""><option value="" disabled>Select category</option>{categories.map(c=><option key={c}>{c}</option>)}</select></label><label>Amount ({settings.currencySymbol}) *<input name="amount" type="number" min="1" step="0.01" required placeholder="0"/></label>
+      {type==="Cash In"?<><label>From *<input name="from" required placeholder="Person, department, or source"/></label><label>To / Cash Location *<select name="to" required defaultValue=""><option value="" disabled>Select cash location</option>{locations.map(l=><option key={l.id}>{l.name}</option>)}</select></label></>:<><label>From / Cash Location *<select name="from" required defaultValue=""><option value="" disabled>Select cash location</option>{locations.map(l=><option key={l.id}>{l.name}</option>)}</select></label><label>To / Paid To *<input name="to" required placeholder="Person, supplier, or department"/></label></>}
+      <label className="wide">Description / Remarks<textarea name="description" rows={4} placeholder="Add optional details about this transaction"/></label></div>
+      <div className="form-actions"><button type="reset" className="secondary">Clear Form</button><button className={`primary ${type==="Cash Out"?"danger":""}`}>Save {type}</button></div></form>
+      <aside className="entry-aside"><article><span>✓</span><h3>Before you save</h3><ul><li>Use the number printed on the hard-copy bill.</li><li>Check the transaction date and amount.</li><li>Select the correct cash location.</li></ul></article><button onClick={()=>go("Transactions")}>View all transactions <b>→</b></button></aside></section>
+  </>;
+}
+
+function TransactionsPage({transactions,locations,settings,onSave,onDelete}:{transactions:Transaction[];locations:Location[];settings:Settings;onSave:(tx:Omit<Transaction,"id">,id?:number)=>Promise<boolean>;onDelete:(id:number)=>void}){
+  const [search,setSearch]=useState(""),[type,setType]=useState("All"),[category,setCategory]=useState("All"),[location,setLocation]=useState("All"),[from,setFrom]=useState(""),[to,setTo]=useState(""),[editing,setEditing]=useState<Transaction|null>(null);
+  const rows=useMemo(()=>transactions.filter(t=>{const q=search.toLowerCase();return (!q||`${t.voucher} ${t.description} ${t.category}`.toLowerCase().includes(q))&&(type==="All"||t.type===type)&&(category==="All"||t.category===category)&&(location==="All"||t.from===location||t.to===location)&&(!from||t.date>=from)&&(!to||t.date<=to)}),[transactions,search,type,category,location,from,to]);
+  return <><PageHeading eyebrow="CASH BOOK" title="Transactions" description={`${rows.length} of ${transactions.length} records shown`}/><section className="panel data-panel"><div className="filters"><label className="search">⌕<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Voucher, category, or description"/></label><select value={type} onChange={e=>setType(e.target.value)}><option>All</option><option>Cash In</option><option>Cash Out</option></select><select value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{cashOutCategories.map(c=><option key={c}>{c}</option>)}</select><select value={location} onChange={e=>setLocation(e.target.value)}><option>All</option>{locations.map(l=><option key={l.id}>{l.name}</option>)}</select><label className="mini-label">From<input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label className="mini-label">To<input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label></div><TransactionTable rows={rows} symbol={settings.currencySymbol} onEdit={setEditing} onDelete={onDelete}/></section>{editing&&<EditModal tx={editing} locations={locations} settings={settings} close={()=>setEditing(null)} save={async tx=>{if(await onSave(tx,editing.id))setEditing(null)}}/>}</>;
+}
+
+function TransactionTable({rows,symbol,compact=false,onEdit,onDelete}:{rows:Transaction[];symbol:string;compact?:boolean;onEdit?:(t:Transaction)=>void;onDelete?:(id:number)=>void}){return <div className="table-wrap"><table><thead><tr><th>Voucher / Bill No.</th><th>Date</th><th>Type</th><th>Category</th><th>Amount</th>{!compact&&<><th>From</th><th>To</th><th>Description</th><th>Actions</th></>}</tr></thead><tbody>{rows.map(t=><tr key={t.id}><td><strong>{t.voucher}</strong></td><td>{dateLabel(t.date)}</td><td><span className={`type-pill ${t.type==="Cash In"?"in":"out"}`}>{t.type}</span></td><td>{t.category}</td><td className={t.type==="Cash In"?"amount-in":"amount-out"}>{t.type==="Cash In"?"+":"−"}{money(t.amount,symbol)}</td>{!compact&&<><td>{t.from}</td><td>{t.to}</td><td className="description-cell">{t.description||"—"}</td><td><div className="row-actions"><button onClick={()=>onEdit?.(t)}>Edit</button><button className="delete" onClick={()=>onDelete?.(t.id)}>Delete</button></div></td></>}</tr>)}</tbody></table>{!rows.length&&<Empty message="No transactions match these filters."/>}</div>}
+
+function EditModal({tx,locations,settings,close,save}:{tx:Transaction;locations:Location[];settings:Settings;close:()=>void;save:(t:Omit<Transaction,"id">)=>void}){const [type,setType]=useState<TxType>(tx.type);return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);save({voucher:String(f.get("voucher")),date:String(f.get("date")),type,category:String(f.get("category")),amount:Number(f.get("amount")),from:String(f.get("from")),to:String(f.get("to")),description:String(f.get("description"))})}}><div className="modal-head"><div><span className="eyebrow">EDIT RECORD</span><h2>Update transaction</h2></div><button type="button" onClick={close}>×</button></div><div className="form-grid"><label>Voucher / Bill Number *<input name="voucher" required defaultValue={tx.voucher}/></label><label>Date *<input name="date" type="date" required defaultValue={tx.date}/></label><label>Type *<select value={type} onChange={e=>setType(e.target.value as TxType)}><option>Cash In</option><option>Cash Out</option></select></label><label>Category *<select name="category" defaultValue={tx.category}>{(type==="Cash In"?cashInCategories:cashOutCategories).map(c=><option key={c}>{c}</option>)}</select></label><label>Amount ({settings.currencySymbol}) *<input name="amount" type="number" min="1" required defaultValue={tx.amount}/></label><label>From *{type==="Cash Out"?<select name="from" defaultValue={tx.from}>{locations.map(l=><option key={l.id}>{l.name}</option>)}</select>:<input name="from" required defaultValue={tx.from}/>}</label><label>To *{type==="Cash In"?<select name="to" defaultValue={tx.to}>{locations.map(l=><option key={l.id}>{l.name}</option>)}</select>:<input name="to" required defaultValue={tx.to}/>}</label><label className="wide">Description<textarea name="description" defaultValue={tx.description}/></label></div><div className="form-actions"><button type="button" className="secondary" onClick={close}>Cancel</button><button className="primary">Save Changes</button></div></form></div>}
+
+function LocationsPage({locations,setLocations,stats,settings,flash}:{locations:Location[];setLocations:React.Dispatch<React.SetStateAction<Location[]>>;stats:Array<Location&{received:number;paid:number;balance:number}>;settings:Settings;flash:(m:string)=>void}){
+  const [editing,setEditing]=useState<Location|null>(null);
+  async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const fd=new FormData(e.currentTarget),name=String(fd.get("name")).trim(),openingBalance=Number(fd.get("openingBalance")),id=editing?.id;if(id)setLocations(items=>items.map(l=>l.id===id?{id,name,openingBalance}:l));else setLocations(items=>[...items,{id:Date.now(),name,openingBalance}]);try{const r=await fetch("/api/finance",{method:id?"PUT":"POST",headers:{"content-type":"application/json"},body:JSON.stringify({kind:"location",id,name,openingBalance})});if(r.ok&&!id){const d=await r.json();setLocations(items=>items.map(l=>l.id>1e12?d.location:l))}}catch{}setEditing(null);e.currentTarget.reset();flash(id?"Cash location updated":"Cash location added");}
+  async function remove(id:number){if(!window.confirm("Remove this cash location? Existing transaction records will not be deleted."))return;setLocations(items=>items.filter(l=>l.id!==id));try{await fetch(`/api/finance?kind=location&id=${id}`,{method:"DELETE"})}catch{}flash("Cash location removed")}
+  return <><PageHeading eyebrow="CASH SETTINGS" title="Cash Locations" description="Add the places where hospital cash is held and monitor each balance."/><section className="location-metrics">{stats.map((l,i)=><article className="panel location-card" key={l.id}><div><span className={`location-icon c${i%4}`}>{l.name.slice(0,2).toUpperCase()}</span><button onClick={()=>setEditing(l)}>Edit</button><button className="delete-text" onClick={()=>remove(l.id)}>Remove</button></div><h3>{l.name}</h3><small>Available balance</small><strong>{money(l.balance,settings.currencySymbol)}</strong><dl><div><dt>Opening</dt><dd>{money(l.openingBalance,settings.currencySymbol)}</dd></div><div><dt>Received</dt><dd className="amount-in">+{money(l.received,settings.currencySymbol)}</dd></div><div><dt>Paid out</dt><dd className="amount-out">−{money(l.paid,settings.currencySymbol)}</dd></div></dl></article>)}</section><form className="panel inline-form" onSubmit={submit} key={editing?.id||"new"}><div><h2>{editing?"Edit cash location":"Add cash location"}</h2><p>Opening balance is the amount held before recorded transactions.</p></div><label>Location Name *<input name="name" required defaultValue={editing?.name} placeholder="e.g. Main Cash"/></label><label>Opening Balance *<input name="openingBalance" type="number" min="0" required defaultValue={editing?.openingBalance||0}/></label><div><button type="button" className="secondary" onClick={()=>setEditing(null)}>Clear</button><button className="primary">{editing?"Update Location":"Add Location"}</button></div></form></>;
+}
+function Reports({transactions,locationStats,settings}:{transactions:Transaction[];locationStats:Array<Location&{received:number;paid:number;balance:number}>;settings:Settings}){
+  const [report,setReport]=useState("Daily Cash Report"),[date,setDate]=useState(today),[month,setMonth]=useState(today.slice(0,7));
+  const rows=transactions.filter(t=>report==="Daily Cash Report"?t.date===date:report==="Monthly Cash Report"||report==="Complete Cash Book"?t.date.startsWith(month):true);
+  const totalIn=rows.filter(t=>t.type==="Cash In").reduce((s,t)=>s+t.amount,0),totalOut=rows.filter(t=>t.type==="Cash Out").reduce((s,t)=>s+t.amount,0);
+  const categoryRows=(type:TxType)=>Object.entries(transactions.filter(t=>t.type===type&&t.date.startsWith(month)).reduce<Record<string,{count:number,total:number}>>((a,t)=>{a[t.category]??={count:0,total:0};a[t.category].count++;a[t.category].total+=t.amount;return a},{}));
+  function exportExcel(){let csv="";if(report.includes("Category-wise")){const data=categoryRows(report.includes("Cash In")?"Cash In":"Cash Out");csv=[["Category","Transactions","Total Amount"],...data.map(([c,v])=>[c,v.count,v.total])].map(r=>r.join(",")).join("\n")}else if(report==="Cash Location Balance Report"){csv=[["Location","Opening Balance","Cash Received","Cash Paid Out","Available Balance"],...locationStats.map(l=>[l.name,l.openingBalance,l.received,l.paid,l.balance])].map(r=>r.join(",")).join("\n")}else csv=[["Voucher","Date","Type","Category","Amount","From","To","Description"],...rows.map(t=>[t.voucher,t.date,t.type,t.category,t.amount,t.from,t.to,`"${t.description.replaceAll('"','""')}"`])].map(r=>r.join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`${report.toLowerCase().replaceAll(" ","-")}.csv`;a.click();URL.revokeObjectURL(a.href)}
+  const reports=["Daily Cash Report","Monthly Cash Report","Category-wise Cash In Report","Category-wise Cash Out Report","Cash Location Balance Report","Complete Cash Book"];
+  return <><PageHeading eyebrow="REPORTING" title="Reports" description="Review, print, and export the hospital cash book."/><section className="reports-layout"><aside className="panel report-nav">{reports.map(r=><button key={r} className={report===r?"active":""} onClick={()=>setReport(r)}><span>▤</span>{r}</button>)}</aside><article className="panel report-sheet"><div className="report-toolbar"><div><h2>{report}</h2><p>{settings.hospitalName}</p></div><div className="report-controls">{report==="Daily Cash Report"?<input type="date" value={date} onChange={e=>setDate(e.target.value)}/>:report!=="Cash Location Balance Report"&&<input type="month" value={month} onChange={e=>setMonth(e.target.value)}/>}<button className="secondary" onClick={()=>window.print()}>⌁ Print</button><button className="primary" onClick={exportExcel}>⇩ Export Excel</button></div></div>{report!=="Cash Location Balance Report"&&!report.includes("Category-wise")&&<><div className="report-totals"><div><small>Cash In</small><strong className="amount-in">{money(totalIn,settings.currencySymbol)}</strong></div><div><small>Cash Out</small><strong className="amount-out">{money(totalOut,settings.currencySymbol)}</strong></div><div><small>Net Movement</small><strong>{money(totalIn-totalOut,settings.currencySymbol)}</strong></div></div><TransactionTable rows={rows} symbol={settings.currencySymbol}/></>}{report.includes("Category-wise")&&<CategoryReport rows={categoryRows(report.includes("Cash In")?"Cash In":"Cash Out")} symbol={settings.currencySymbol}/>} {report==="Cash Location Balance Report"&&<LocationReport rows={locationStats} symbol={settings.currencySymbol}/>}</article></section></>;
+}
+function CategoryReport({rows,symbol}:{rows:[string,{count:number;total:number}][];symbol:string}){return <div className="table-wrap"><table><thead><tr><th>Category</th><th>Transactions</th><th>Total Amount</th></tr></thead><tbody>{rows.map(([c,v])=><tr key={c}><td><strong>{c}</strong></td><td>{v.count}</td><td><strong>{money(v.total,symbol)}</strong></td></tr>)}</tbody></table>{!rows.length&&<Empty message="No report data available."/>}</div>}
+function LocationReport({rows,symbol}:{rows:Array<Location&{received:number;paid:number;balance:number}>;symbol:string}){return <div className="table-wrap"><table><thead><tr><th>Cash Location</th><th>Opening Balance</th><th>Cash Received</th><th>Cash Paid Out</th><th>Available Balance</th></tr></thead><tbody>{rows.map(l=><tr key={l.id}><td><strong>{l.name}</strong></td><td>{money(l.openingBalance,symbol)}</td><td className="amount-in">+{money(l.received,symbol)}</td><td className="amount-out">−{money(l.paid,symbol)}</td><td><strong>{money(l.balance,symbol)}</strong></td></tr>)}</tbody></table></div>}
+
+function SettingsPage({settings,setSettings,flash}:{settings:Settings;setSettings:React.Dispatch<React.SetStateAction<Settings>>;flash:(m:string)=>void}){async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget),next={hospitalName:String(f.get("hospitalName")),currencySymbol:String(f.get("currencySymbol"))};setSettings(next);try{await fetch("/api/finance",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({kind:"settings",...next})})}catch{}flash("Settings saved")};return <><PageHeading eyebrow="APPLICATION" title="Settings" description="Set the hospital name and currency shown across the cash book."/><form className="panel settings-form" onSubmit={submit}><div className="form-title"><span className="blue-bg">⚙</span><div><h2>General Settings</h2><p>These details appear on dashboards and reports.</p></div></div><label>Hospital Name *<input name="hospitalName" required defaultValue={settings.hospitalName}/></label><label>Currency Symbol *<input name="currencySymbol" required defaultValue={settings.currencySymbol}/></label><div className="form-actions"><button className="primary">Save Settings</button></div></form></>}
+function Empty({message}:{message:string}){return <div className="empty"><span>▤</span><p>{message}</p></div>}

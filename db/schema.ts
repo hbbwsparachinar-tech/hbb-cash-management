@@ -1,25 +1,9 @@
 import { sql } from "drizzle-orm";
 import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+export const cashTransactions=sqliteTable("cash_transactions",{id:integer("id").primaryKey({autoIncrement:true}),voucher:text("voucher").notNull().unique(),date:text("date").notNull(),type:text("type").notNull(),category:text("category").notNull(),amount:real("amount").notNull(),source:text("source").notNull(),destination:text("destination").notNull(),description:text("description").notNull().default(""),createdAt:text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`)},t=>[index("idx_cash_transactions_date_type").on(t.date,t.type)]);
+export const cashLocations=sqliteTable("cash_locations",{id:integer("id").primaryKey({autoIncrement:true}),name:text("name").notNull().unique(),openingBalance:real("opening_balance").notNull().default(0),createdAt:text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`)});
+export const cashSettings=sqliteTable("cash_settings",{id:integer("id").primaryKey(),hospitalName:text("hospital_name").notNull(),currencySymbol:text("currency_symbol").notNull()});
 
-export const transactions = sqliteTable("transactions", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  reference: text("reference").notNull().unique(),
-  date: text("date").notNull(),
-  description: text("description").notNull(),
-  department: text("department").notNull(),
-  type: text("type").notNull(),
-  method: text("method").notNull(),
-  amount: real("amount").notNull(),
-  status: text("status").notNull().default("Pending"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-}, (table) => [index("transactions_date_idx").on(table.date)]);
-
-export const approvals = sqliteTable("approvals", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  request: text("request").notNull(),
-  department: text("department").notNull(),
-  requester: text("requester").notNull(),
-  amount: real("amount").notNull(),
-  age: text("age").notNull(),
-  status: text("status").notNull().default("Pending"),
-});
+// Retained only so existing deployments can migrate without dropping historical tables.
+export const legacyTransactions=sqliteTable("transactions",{id:integer("id").primaryKey({autoIncrement:true}),reference:text("reference").notNull().unique(),date:text("date").notNull(),description:text("description").notNull(),department:text("department").notNull(),type:text("type").notNull(),method:text("method").notNull(),amount:real("amount").notNull(),status:text("status").notNull().default("Pending"),createdAt:text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`)},t=>[index("transactions_date_idx").on(t.date)]);
+export const legacyApprovals=sqliteTable("approvals",{id:integer("id").primaryKey({autoIncrement:true}),request:text("request").notNull(),department:text("department").notNull(),requester:text("requester").notNull(),amount:real("amount").notNull(),age:text("age").notNull(),status:text("status").notNull().default("Pending")});
