@@ -22,6 +22,13 @@
       "when": 1785920551926,
       "tag": "0002_dusty_rage",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785921129624,
+      "tag": "0003_overconfident_mantis",
+      "breakpoints": true
     }
   ]
 }
