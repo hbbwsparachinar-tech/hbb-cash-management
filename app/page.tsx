@@ -20,7 +20,7 @@ const initialTransactions: Transaction[] = [
 const today = new Date().toISOString().slice(0,10);
 const money = (value:number, symbol="Rs.") => `${symbol} ${new Intl.NumberFormat("en-PK",{maximumFractionDigits:0}).format(value)}`;
 const dateLabel = (date:string) => new Date(`${date}T00:00:00`).toLocaleDateString("en-PK",{day:"2-digit",month:"short",year:"numeric"});
-const icon:Record<string,string> = { Dashboard:"⌂", "Cash In":"↓", "Cash Out":"↑", Transactions:"↔", Reports:"▥", Settings:"⚙" };
+const icon:Record<string,string> = { Dashboard:"⌂", "Cash In":"↓", "Cash Out":"↑", Transactions:"↔", Reports:"▥" };
 const navItems = Object.keys(icon);
 
 export default function Home(){
@@ -75,7 +75,6 @@ export default function Home(){
         {active==="Cash Out"&&<EntryPage type="Cash Out" settings={settings} onSave={saveTransaction} go={go}/>}
         {active==="Transactions"&&<TransactionsPage transactions={transactions} settings={settings} onSave={saveTransaction} onDelete={deleteTransaction}/>}
         {active==="Reports"&&<Reports transactions={transactions} settings={settings}/>}
-        {active==="Settings"&&<SettingsPage settings={settings} setSettings={setSettings} flash={flash}/>}
       </div>
     </section>
     {notice&&<div className="toast"><b>✓</b>{notice}</div>}
@@ -149,5 +148,4 @@ function Reports({transactions,settings}:{transactions:Transaction[];settings:Se
 }
 function CategoryReport({rows,symbol}:{rows:[string,{count:number;total:number}][];symbol:string}){return <div className="table-wrap"><table><thead><tr><th>Category</th><th>Transactions</th><th>Total Amount</th></tr></thead><tbody>{rows.map(([c,v])=><tr key={c}><td><strong>{c}</strong></td><td>{v.count}</td><td><strong>{money(v.total,symbol)}</strong></td></tr>)}</tbody></table>{!rows.length&&<Empty message="No report data available."/>}</div>}
 
-function SettingsPage({settings,setSettings,flash}:{settings:Settings;setSettings:React.Dispatch<React.SetStateAction<Settings>>;flash:(m:string)=>void}){async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget),next={hospitalName:String(f.get("hospitalName")),currencySymbol:String(f.get("currencySymbol"))};setSettings(next);try{await fetch("/api/finance",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({kind:"settings",...next})})}catch{}flash("Settings saved")};return <><PageHeading eyebrow="APPLICATION" title="Settings" description="Set the hospital name and currency shown across the cash book."/><form className="panel settings-form" onSubmit={submit}><div className="form-title"><span className="blue-bg">⚙</span><div><h2>General Settings</h2><p>These details appear on dashboards and reports.</p></div></div><label>Hospital Name *<input name="hospitalName" required defaultValue={settings.hospitalName}/></label><label>Currency Symbol *<input name="currencySymbol" required defaultValue={settings.currencySymbol}/></label><div className="form-actions"><button className="primary">Save Settings</button></div></form></>}
 function Empty({message}:{message:string}){return <div className="empty"><span>▤</span><p>{message}</p></div>}
