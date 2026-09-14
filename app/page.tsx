@@ -74,7 +74,6 @@ export default function Home(){
     <aside className={`sidebar ${menuOpen?"open":""}`}>
       <div className="brand"><span className="brand-mark">H+</span><span><strong>{settings.hospitalName}</strong><small>Cash Management</small></span></div>
       <nav aria-label="Main navigation">{navItems.map(item=><button key={item} className={active===item?"active":""} onClick={()=>go(item)}><span>{icon[item]}</span>{item}</button>)}</nav>
-      <div className="sidebar-help"><span>i</span><div><strong>Simple cash book</strong><small>All balances update automatically.</small></div></div>
       <footer><span className="status-dot"/> Data saved securely</footer>
     </aside>
     {menuOpen&&<button className="mobile-scrim" aria-label="Close navigation" onClick={()=>setMenuOpen(false)}/>}
@@ -83,8 +82,8 @@ export default function Home(){
       <div className="page">
         {loading&&<div className="loading-line"/>}
         {active==="Dashboard"&&<Dashboard transactions={transactions} settings={settings} go={go}/>}
-        {active==="Cash In"&&<EntryPage type="Cash In" settings={settings} onSave={saveTransaction} go={go}/>}
-        {active==="Cash Out"&&<EntryPage type="Cash Out" settings={settings} onSave={saveTransaction} go={go}/>}
+        {active==="Cash In"&&<EntryPage type="Cash In" settings={settings} onSave={saveTransaction}/>}
+        {active==="Cash Out"&&<EntryPage type="Cash Out" settings={settings} onSave={saveTransaction}/>}
         {active==="Transactions"&&<TransactionsPage transactions={transactions} settings={settings} onSave={saveTransaction} onDelete={deleteTransaction}/>}
         {active==="Reports"&&<Reports transactions={transactions} settings={settings}/>}
       </div>
@@ -125,17 +124,16 @@ function Metric({label,value,tone,icon,note,featured=false}:{label:string;value:
 function PanelHead({title,subtitle,action}:{title:string;subtitle:string;action?:React.ReactNode}){ return <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div>{action}</div>; }
 function SummaryCard({title,data,total,symbol,tone}:{title:string;data:[string,number][];total:number;symbol:string;tone:string}){return <article className="panel summary-card"><PanelHead title={title} subtitle="Selected reporting period"/><div className="summary-bars">{data.length?data.map(([name,value])=><div key={name}><span><strong>{name}</strong><b>{money(value,symbol)}</b></span><i><em className={tone} style={{width:`${Math.max(7,value/Math.max(total,1)*100)}%`}}/></i></div>):<Empty message="No transactions in this period."/>}</div></article>}
 
-function EntryPage({type,settings,onSave,go}:{type:TxType;settings:Settings;onSave:(tx:Omit<Transaction,"id">)=>Promise<boolean>;go:(p:string)=>void}){
+function EntryPage({type,settings,onSave}:{type:TxType;settings:Settings;onSave:(tx:Omit<Transaction,"id">)=>Promise<boolean>}){
   const categories=type==="Cash In"?cashInCategories:cashOutCategories;
   async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const form=e.currentTarget,fd=new FormData(form);const ok=await onSave({voucher:type==="Cash Out"?String(fd.get("voucher")).trim():null,date:String(fd.get("date")),type,category:String(fd.get("category")),amount:Number(fd.get("amount")),from:type==="Cash In"?String(fd.get("from")).trim():"",to:type==="Cash Out"?String(fd.get("to")).trim():"",description:String(fd.get("description")).trim()});if(ok) form.reset();}
   return <>
-    <PageHeading eyebrow={type.toUpperCase()} title={`Record ${type}`} description={type==="Cash In"?"Record cash received from a person, department, or source.":"Record a payment and who it was paid to."}/>
-    <section className="form-layout"><form className="panel entry-form" onSubmit={submit}><div className="form-title"><span className={type==="Cash In"?"green-bg":"red-bg"}>{type==="Cash In"?"↓":"↑"}</span><div><h2>{type} Entry</h2><p>Fields marked with * are required.</p></div></div>
-      <div className="form-grid">{type==="Cash Out"&&<label>Voucher / Bill Number *<input name="voucher" required placeholder="Enter hard-copy bill number"/></label>}<label>Date *<input name="date" type="date" required defaultValue={today}/></label><label className={type==="Cash Out"?"wide":""}>{type==="Cash In"?"Category / Department":"Expense Category"} *<select name="category" required defaultValue=""><option value="" disabled>Select category</option>{categories.map(c=><option key={c}>{c}</option>)}</select></label><label>Amount ({settings.currencySymbol}) *<input name="amount" type="number" min="1" step="0.01" required placeholder="0"/></label>
-      {type==="Cash In"?<label>From *<input name="from" required placeholder="Person, department, or source"/></label>:<label>To / Paid To *<input name="to" required placeholder="Person, supplier, or department"/></label>}
+    <section className="entry-heading"><span className={`entry-badge ${type==="Cash In"?"in":"out"}`}>{type}</span><div><h1>{type} Entry</h1><p>{type==="Cash In"?"Record money received from a person, department, or source.":"Record a payment with its manual voucher or bill number."}</p></div></section>
+    <section className="form-layout"><form className="panel entry-form" onSubmit={submit}><div className="entry-form-top"><div><h2>Transaction details</h2><p>Fields marked with * are required.</p></div></div>
+      <div className={`form-grid ${type==="Cash In"?"cash-in-fields":"cash-out-fields"}`}>{type==="Cash Out"&&<label>Voucher / Bill Number *<input name="voucher" required placeholder="Enter hard-copy bill number"/></label>}<label>Date *<input name="date" type="date" required defaultValue={today}/></label><label>{type==="Cash In"?"Category / Department":"Expense Category"} *<select name="category" required defaultValue=""><option value="" disabled>Select category</option>{categories.map(c=><option key={c}>{c}</option>)}</select></label><label>Amount ({settings.currencySymbol}) *<input name="amount" type="number" min="1" step="0.01" required placeholder="0"/></label>
+      {type==="Cash In"?<label className="source-field">From *<input name="from" required placeholder="Person, department, or source"/></label>:<label className="recipient-field">To / Paid To *<input name="to" required placeholder="Person, supplier, or department"/></label>}
       <label className="wide">Description / Remarks<textarea name="description" rows={4} placeholder="Add optional details about this transaction"/></label></div>
-      <div className="form-actions"><button type="reset" className="secondary">Clear Form</button><button className={`primary ${type==="Cash Out"?"danger":""}`}>Save {type}</button></div></form>
-      <aside className="entry-aside"><article><span>✓</span><h3>Before you save</h3><ul>{type==="Cash Out"&&<li>Use the number printed on the hard-copy bill.</li>}<li>Check the transaction date and amount.</li><li>Check the category and {type==="Cash In"?"cash source":"recipient"}.</li></ul></article><button onClick={()=>go("Transactions")}>View all transactions <b>→</b></button></aside></section>
+      <div className="form-actions"><button type="reset" className="secondary">Clear Form</button><button className={`primary ${type==="Cash Out"?"danger":""}`}>Save {type}</button></div></form></section>
   </>;
 }
 
