@@ -8,14 +8,7 @@ type Settings = { hospitalName:string; currencySymbol:string };
 
 const cashInCategories = ["Blood","Donation","Hospital","Lab 1","Lab 2","Pharma","Radiology","Transport","Azadar Clinic","Vaccine","ECG","Small Industry"];
 const cashOutCategories = [...cashInCategories,"Education","Food & Refreshment","Functions","Camps","Investment","Legal Charges","Free Medication","Packages","Printing","Projects","Ramadan / Food Packages","Repair & Maintenance","Special Persons Payment","Utilities","Free Vaccines","Salaries"];
-const initialTransactions: Transaction[] = [
-  { id:1,voucher:"HBB-260805-01",date:"2026-08-05",type:"Cash In",category:"Hospital",amount:185000,from:"Patient collections",to:"Hospital Cash Counter",description:"Morning counter collection" },
-  { id:2,voucher:"HBB-260805-02",date:"2026-08-05",type:"Cash In",category:"Pharma",amount:96500,from:"Pharmacy sales",to:"Pharmacy Cash Counter",description:"Daily cash sales" },
-  { id:3,voucher:"HBB-260805-03",date:"2026-08-05",type:"Cash Out",category:"Utilities",amount:68500,from:"Bank Account",to:"K-Electric",description:"Electricity bill" },
-  { id:4,voucher:"HBB-260804-06",date:"2026-08-04",type:"Cash In",category:"Donation",amount:250000,from:"Community donor",to:"Main Cash",description:"General hospital donation" },
-  { id:5,voucher:"HBB-260804-07",date:"2026-08-04",type:"Cash Out",category:"Free Medication",amount:124000,from:"Main Cash",to:"Al-Shifa Medical Store",description:"Medicines for welfare patients" },
-  { id:6,voucher:"HBB-260803-04",date:"2026-08-03",type:"Cash In",category:"Lab 1",amount:118750,from:"Lab collections",to:"Lab Cash Counter",description:"Lab test receipts" },
-];
+const initialTransactions: Transaction[] = [];
 
 const today = new Date().toISOString().slice(0,10);
 const money = (value:number, symbol="Rs.") => `${symbol} ${new Intl.NumberFormat("en-PK",{maximumFractionDigits:0}).format(value)}`;
@@ -39,23 +32,42 @@ export default function Home(){
   function flash(message:string){ setNotice(message); window.setTimeout(()=>setNotice(""),2600); }
   function go(page:string){ setActive(page); setMenuOpen(false); window.scrollTo({top:0,behavior:"smooth"}); }
 
+  async function responseError(response:Response, fallback:string){
+    try{const data=await response.json() as {error?:string};return data.error||fallback;}catch{return fallback;}
+  }
+
   async function saveTransaction(tx:Omit<Transaction,"id">, id?:number){
     const duplicate=Boolean(tx.voucher)&&transactions.some(t=>t.voucher?.toLowerCase()===tx.voucher?.toLowerCase()&&t.id!==id);
     if(duplicate){ flash("That voucher / bill number already exists"); return false; }
+    const previous=id?transactions.find(t=>t.id===id):undefined;
+    const temporaryId=Date.now();
     if(id){ setTransactions(items=>items.map(t=>t.id===id?{...tx,id}:t)); }
-    else { setTransactions(items=>[{...tx,id:Date.now()},...items]); }
+    else { setTransactions(items=>[{...tx,id:temporaryId},...items]); }
     try{
       const response=await fetch("/api/finance",{method:id?"PUT":"POST",headers:{"content-type":"application/json"},body:JSON.stringify({kind:"transaction",id,...tx})});
-      if(response.ok){ const data=await response.json(); if(!id&&data.transaction) setTransactions(items=>items.map(t=>t.id>1e12?data.transaction:t)); }
-    }catch{}
-    flash(id?"Transaction updated":"Transaction saved successfully"); return true;
+      if(!response.ok) throw new Error(await responseError(response,"Could not save this transaction."));
+      const data=await response.json() as {transaction?:Transaction};
+      if(data.transaction) setTransactions(items=>items.map(t=>t.id===(id||temporaryId)?data.transaction!:t));
+      flash(id?"Transaction updated":"Transaction saved successfully"); return true;
+    }catch(error){
+      if(id&&previous) setTransactions(items=>items.map(t=>t.id===id?previous:t));
+      else setTransactions(items=>items.filter(t=>t.id!==temporaryId));
+      flash(error instanceof Error?error.message:"Could not save this transaction."); return false;
+    }
   }
 
   async function deleteTransaction(id:number){
     if(!window.confirm("Delete this transaction? This action cannot be undone.")) return;
+    const previous=transactions.find(t=>t.id===id), previousIndex=transactions.findIndex(t=>t.id===id);
     setTransactions(items=>items.filter(t=>t.id!==id));
-    try{ await fetch(`/api/finance?kind=transaction&id=${id}`,{method:"DELETE"}); }catch{}
-    flash("Transaction deleted");
+    try{
+      const response=await fetch(`/api/finance?kind=transaction&id=${id}`,{method:"DELETE"});
+      if(!response.ok) throw new Error(await responseError(response,"Could not delete this transaction."));
+      flash("Transaction deleted");
+    }catch(error){
+      if(previous) setTransactions(items=>{const restored=[...items];restored.splice(previousIndex,0,previous);return restored;});
+      flash(error instanceof Error?error.message:"Could not delete this transaction.");
+    }
   }
 
   return <main className="app-shell">
