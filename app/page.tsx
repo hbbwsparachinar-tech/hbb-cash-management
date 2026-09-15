@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { getBrowserSupabaseClient } from "../lib/supabase-browser";
 
 type TxType = "Cash In" | "Cash Out";
 type Transaction = { id:number; voucher:string|null; date:string; type:TxType; category:string; amount:number; from:string; to:string; description:string };
@@ -22,25 +23,84 @@ const icon:Record<string,string> = { Dashboard:"⌂", "Cash In":"↓", "Cash Out
 const navItems = Object.keys(icon);
 
 export default function Home(){
+  const supabase=useMemo(()=>getBrowserSupabaseClient(),[]);
   const [active,setActive] = useState("Dashboard");
   const [transactions,setTransactions] = useState<Transaction[]>(initialTransactions);
   const [departments,setDepartments] = useState<string[]>([]);
   const [settings,setSettings] = useState<Settings>({hospitalName:"HBB Hospital",currencySymbol:"Rs."});
   const [menuOpen,setMenuOpen] = useState(false);
   const [notice,setNotice] = useState("");
-  const [loading,setLoading] = useState(true);
+  const [loading,setLoading] = useState(false);
+  const [authReady,setAuthReady]=useState(!supabase);
+  const [accessToken,setAccessToken]=useState<string|null>(null);
+  const [userEmail,setUserEmail]=useState("");
+  const [authMessage,setAuthMessage]=useState(supabase?"":"Login has not been configured yet. Add the public Supabase URL and publishable key in Vercel.");
+  const [signingIn,setSigningIn]=useState(false);
 
-  useEffect(()=>{ fetch("/api/finance").then(r=>r.ok?r.json():Promise.reject()).then(data=>{
-    if(data.transactions) setTransactions(data.transactions);
-    if(data.settings) setSettings(data.settings);
-    if(data.departments) setDepartments(data.departments);
-  }).catch(()=>undefined).finally(()=>setLoading(false)); },[]);
+  useEffect(()=>{
+    if(!supabase)return;
+    let current=true;
+    void supabase.auth.getSession().then(({data,error})=>{
+      if(!current)return;
+      if(error)setAuthMessage(error.message);
+      setAccessToken(data.session?.access_token??null);
+      setUserEmail(data.session?.user.email??"");
+      setLoading(Boolean(data.session));
+      setAuthReady(true);
+    }).catch(()=>{if(current){setAuthMessage("Your sign-in session could not be checked. Please try again.");setAuthReady(true);}});
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,session)=>{
+      if(!current)return;
+      setAccessToken(session?.access_token??null);
+      setUserEmail(session?.user.email??"");
+      setLoading(Boolean(session));
+      if(session)setAuthMessage("");
+      setAuthReady(true);
+    });
+    return ()=>{current=false;subscription.unsubscribe();};
+  },[supabase]);
 
   function flash(message:string){ setNotice(message); window.setTimeout(()=>setNotice(""),2600); }
   function go(page:string){ setActive(page); setMenuOpen(false); window.scrollTo({top:0,behavior:"smooth"}); }
 
   async function responseError(response:Response, fallback:string){
     try{const data=await response.json() as {error?:string};return data.error||fallback;}catch{return fallback;}
+  }
+
+  const apiHeaders=useCallback((json=false)=>{
+    const headers:Record<string,string>={authorization:`Bearer ${accessToken??""}`};
+    if(json)headers["content-type"]="application/json";
+    return headers;
+  },[accessToken]);
+
+  useEffect(()=>{
+    if(!accessToken)return;
+    let current=true;
+    void fetch("/api/finance",{headers:apiHeaders()}).then(async response=>{
+      if(!response.ok)throw new Error(await responseError(response,"Could not load the cash records."));
+      return response.json() as Promise<{transactions?:Transaction[];settings?:Settings;departments?:string[]}>;
+    }).then(data=>{
+      if(!current)return;
+      if(data.transactions)setTransactions(data.transactions);
+      if(data.settings)setSettings(data.settings);
+      if(data.departments)setDepartments(data.departments);
+    }).catch(error=>{if(current)flash(error instanceof Error?error.message:"Could not load the cash records.");}).finally(()=>{if(current)setLoading(false);});
+    return ()=>{current=false;};
+  },[accessToken,apiHeaders]);
+
+  async function signIn(email:string,password:string){
+    if(!supabase){setAuthMessage("Login has not been configured yet. Please check the Vercel environment variables.");return;}
+    setSigningIn(true);setAuthMessage("");
+    const {data,error}=await supabase.auth.signInWithPassword({email,password});
+    setSigningIn(false);
+    if(error){setAuthMessage(error.message);return;}
+    setAccessToken(data.session?.access_token??null);
+    setUserEmail(data.user?.email??"");
+    setLoading(Boolean(data.session));
+  }
+
+  async function signOut(){
+    await supabase?.auth.signOut();
+    setAccessToken(null);setUserEmail("");setTransactions(initialTransactions);setDepartments([]);setActive("Dashboard");setLoading(false);
   }
 
   async function saveTransaction(tx:Omit<Transaction,"id">, id?:number){
@@ -51,7 +111,7 @@ export default function Home(){
     if(id){ setTransactions(items=>items.map(t=>t.id===id?{...tx,id}:t)); }
     else { setTransactions(items=>[{...tx,id:temporaryId},...items]); }
     try{
-      const response=await fetch("/api/finance",{method:id?"PUT":"POST",headers:{"content-type":"application/json"},body:JSON.stringify({kind:"transaction",id,...tx})});
+      const response=await fetch("/api/finance",{method:id?"PUT":"POST",headers:apiHeaders(true),body:JSON.stringify({kind:"transaction",id,...tx})});
       if(!response.ok) throw new Error(await responseError(response,"Could not save this transaction."));
       const data=await response.json() as {transaction?:Transaction};
       if(data.transaction) setTransactions(items=>items.map(t=>t.id===(id||temporaryId)?data.transaction!:t));
@@ -65,7 +125,7 @@ export default function Home(){
 
   async function addDepartment(name:string){
     try{
-      const response=await fetch("/api/finance",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({kind:"department",name})});
+      const response=await fetch("/api/finance",{method:"POST",headers:apiHeaders(true),body:JSON.stringify({kind:"department",name})});
       if(!response.ok) throw new Error(await responseError(response,"Could not add this department."));
       const data=await response.json() as {department?:{name:string}};
       if(!data.department?.name) throw new Error("Could not add this department.");
@@ -83,7 +143,7 @@ export default function Home(){
     const previous=transactions.find(t=>t.id===id), previousIndex=transactions.findIndex(t=>t.id===id);
     setTransactions(items=>items.filter(t=>t.id!==id));
     try{
-      const response=await fetch(`/api/finance?kind=transaction&id=${id}`,{method:"DELETE"});
+      const response=await fetch(`/api/finance?kind=transaction&id=${id}`,{method:"DELETE",headers:apiHeaders()});
       if(!response.ok) throw new Error(await responseError(response,"Could not delete this transaction."));
       flash("Transaction deleted");
     }catch(error){
@@ -91,6 +151,9 @@ export default function Home(){
       flash(error instanceof Error?error.message:"Could not delete this transaction.");
     }
   }
+
+  if(!authReady)return <AuthLoading/>;
+  if(!accessToken)return <LoginPage message={authMessage} signingIn={signingIn} onSignIn={signIn}/>;
 
   return <main className="app-shell">
     <aside className={`sidebar ${menuOpen?"open":""}`}>
@@ -100,7 +163,7 @@ export default function Home(){
     </aside>
     {menuOpen&&<button className="mobile-scrim" aria-label="Close navigation" onClick={()=>setMenuOpen(false)}/>}
     <section className="content">
-      <header className="topbar"><button className="menu-button" onClick={()=>setMenuOpen(!menuOpen)} aria-label="Open navigation">☰</button><div><small>Hospital Cash Management</small><strong>{active}</strong></div><div className="top-date"><span>Today</span><strong>{new Date().toLocaleDateString("en-PK",{day:"2-digit",month:"long",year:"numeric"})}</strong></div></header>
+      <header className="topbar"><button className="menu-button" onClick={()=>setMenuOpen(!menuOpen)} aria-label="Open navigation">☰</button><div><small>Hospital Cash Management</small><strong>{active}</strong></div><div className="topbar-account"><span>Signed in</span><strong>{userEmail||"Hospital account"}</strong></div><button className="logout-button" onClick={signOut}>Sign out</button><div className="top-date"><span>Today</span><strong>{new Date().toLocaleDateString("en-PK",{day:"2-digit",month:"long",year:"numeric"})}</strong></div></header>
       <div className="page">
         {loading&&<div className="loading-line"/>}
         {active==="Dashboard"&&<Dashboard transactions={transactions} settings={settings} go={go}/>}
@@ -112,6 +175,15 @@ export default function Home(){
     </section>
     {notice&&<div className="toast"><b>✓</b>{notice}</div>}
   </main>;
+}
+
+function AuthLoading(){return <main className="auth-shell"><section className="auth-card auth-loading"><span className="auth-mark">H+</span><p>Checking your secure session…</p></section></main>;}
+
+function LoginPage({message,signingIn,onSignIn}:{message:string;signingIn:boolean;onSignIn:(email:string,password:string)=>Promise<void>}){
+  const [email,setEmail]=useState("");
+  const [password,setPassword]=useState("");
+  async function submit(event:FormEvent<HTMLFormElement>){event.preventDefault();await onSignIn(email.trim(),password);}
+  return <main className="auth-shell"><section className="auth-card"><div className="auth-brand"><span className="auth-mark">H+</span><div><strong>HBB Hospital</strong><small>Cash Management</small></div></div><div className="auth-copy"><span className="eyebrow">SECURE ACCESS</span><h1>Sign in to continue</h1><p>Use your hospital account to access the cash book and reports.</p></div><form onSubmit={submit}><label>Email address<input type="email" autoComplete="email" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@hospital.org"/></label><label>Password<input type="password" autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} required placeholder="Enter your password"/></label>{message&&<p className="auth-error" role="alert">{message}</p>}<button className="primary auth-submit" disabled={signingIn}>{signingIn?"Signing in…":"Sign in"}</button></form><p className="auth-note">For account access, contact the hospital administrator.</p></section></main>;
 }
 
 function PageHeading({eyebrow,title,description,action}:{eyebrow:string;title:string;description:string;action?:React.ReactNode}){

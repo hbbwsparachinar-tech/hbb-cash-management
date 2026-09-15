@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -63,6 +64,32 @@ function configuration() {
   }
 
   return { url, secretKey };
+}
+
+async function authenticationError(request: Request) {
+  const authorization = request.headers.get("authorization");
+  const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+
+  if (!token) {
+    return NextResponse.json({ error: "Please sign in to continue." }, { status: 401 });
+  }
+
+  try {
+    const { url, secretKey } = configuration();
+    const supabase = createClient(url, secretKey, {
+      auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false },
+    });
+    const { data, error } = await supabase.auth.getUser(token);
+
+    if (error || !data.user) {
+      return NextResponse.json({ error: "Your session has expired. Please sign in again." }, { status: 401 });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The authentication service could not be reached.";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+
+  return null;
 }
 
 async function requestSupabase(
@@ -154,7 +181,10 @@ async function errorFrom(response: Response, duplicateMessage = "Cash Out vouche
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const authError = await authenticationError(request);
+  if (authError) return authError;
+
   try {
     const query = new URLSearchParams({
       select: transactionSelect,
@@ -220,6 +250,9 @@ async function createDepartment(input: DepartmentInput) {
 }
 
 export async function POST(request: Request) {
+  const authError = await authenticationError(request);
+  if (authError) return authError;
+
   try {
     const input = (await request.json()) as FinanceInput;
     if (input.kind === "department") return await createDepartment(input);
@@ -244,6 +277,9 @@ export async function POST(request: Request) {
 }
 
 export async function PUT(request: Request) {
+  const authError = await authenticationError(request);
+  if (authError) return authError;
+
   try {
     const input = (await request.json()) as TransactionInput;
     const id = Number(input.id);
@@ -272,6 +308,9 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const authError = await authenticationError(request);
+  if (authError) return authError;
+
   try {
     const id = Number(new URL(request.url).searchParams.get("id"));
     if (!Number.isSafeInteger(id) || id <= 0) {
