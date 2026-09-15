@@ -17,6 +17,14 @@ type TransactionInput = {
   description?: unknown;
 };
 
+type DepartmentInput = {
+  name?: unknown;
+};
+
+type FinanceInput = TransactionInput & DepartmentInput & {
+  kind?: unknown;
+};
+
 type StoredTransaction = {
   id: number;
   voucher: string | null;
@@ -29,9 +37,22 @@ type StoredTransaction = {
   description: string;
 };
 
+type StoredDepartment = {
+  id: number;
+  name: string;
+};
+
 const transactionSelect =
   "id,voucher,date:transaction_date,type:transaction_type,category,amount,from:source,to:destination,description";
 const settingsSelect = "hospitalName:hospital_name,currencySymbol:currency_symbol";
+const departmentSelect = "id,name";
+const builtInCategoryNames = new Set([
+  "Blood", "Donation", "Hospital", "Lab 1", "Lab 2", "Pharma", "Radiology", "Transport",
+  "Azadar Clinic", "Vaccine", "ECG", "Small Industry", "Education", "Food & Refreshment",
+  "Functions", "Camps", "Investment", "Legal Charges", "Free Medication", "Packages", "Printing",
+  "Projects", "Ramadan / Food Packages", "Repair & Maintenance", "Special Persons Payment",
+  "Utilities", "Free Vaccines", "Salaries",
+].map((name) => name.toLowerCase()));
 
 function configuration() {
   const url = process.env.SUPABASE_URL?.replace(/\/$/, "");
@@ -105,18 +126,28 @@ function parseTransaction(input: TransactionInput) {
   } as const;
 }
 
+function parseDepartment(input: DepartmentInput) {
+  const name = text(input.name).replace(/\s+/g, " ");
+  if (!name) return { error: "Department name is required." } as const;
+  if (name.length > 80) return { error: "Department name must be 80 characters or fewer." } as const;
+  if (builtInCategoryNames.has(name.toLowerCase())) {
+    return { error: "This department is already in the list." } as const;
+  }
+  return { value: { name } } as const;
+}
+
 function normalizeTransaction(transaction: StoredTransaction) {
   return { ...transaction, amount: Number(transaction.amount) };
 }
 
-async function errorFrom(response: Response) {
+async function errorFrom(response: Response, duplicateMessage = "Cash Out voucher / bill number must be unique.") {
   const fallback = response.status === 409
-    ? "Cash Out voucher / bill number must be unique."
+    ? duplicateMessage
     : "The database request could not be completed.";
 
   try {
     const data = (await response.json()) as { message?: string; details?: string; code?: string };
-    if (data.code === "23505") return "Cash Out voucher / bill number must be unique.";
+    if (data.code === "23505") return duplicateMessage;
     return data.message ?? data.details ?? fallback;
   } catch {
     return fallback;
@@ -130,9 +161,11 @@ export async function GET() {
       order: "transaction_date.desc,id.desc",
     });
     const settingsQuery = new URLSearchParams({ select: settingsSelect, id: "eq.1" });
-    const [transactionsResponse, settingsResponse] = await Promise.all([
+    const departmentsQuery = new URLSearchParams({ select: departmentSelect, order: "name.asc" });
+    const [transactionsResponse, settingsResponse, departmentsResponse] = await Promise.all([
       requestSupabase(`cash_transactions?${query}`),
       requestSupabase(`cash_settings?${settingsQuery}`),
+      requestSupabase(`cash_departments?${departmentsQuery}`),
     ]);
 
     if (!transactionsResponse.ok) {
@@ -143,15 +176,21 @@ export async function GET() {
       return NextResponse.json({ error: await errorFrom(settingsResponse) }, { status: settingsResponse.status });
     }
 
+    if (!departmentsResponse.ok) {
+      return NextResponse.json({ error: await errorFrom(departmentsResponse, "This department already exists.") }, { status: departmentsResponse.status });
+    }
+
     const transactions = (await transactionsResponse.json()) as StoredTransaction[];
     const settings = (await settingsResponse.json()) as Array<{
       hospitalName: string;
       currencySymbol: string;
     }>;
+    const departments = (await departmentsResponse.json()) as StoredDepartment[];
 
     return NextResponse.json({
       transactions: transactions.map(normalizeTransaction),
       settings: settings[0] ?? { hospitalName: "HBB Hospital", currencySymbol: "Rs." },
+      departments: departments.map((department) => department.name),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The database connection could not be established.";
@@ -159,9 +198,33 @@ export async function GET() {
   }
 }
 
+async function createDepartment(input: DepartmentInput) {
+  const parsed = parseDepartment(input);
+  if ("error" in parsed) return NextResponse.json(parsed, { status: 400 });
+
+  const response = await requestSupabase(`cash_departments?select=${encodeURIComponent(departmentSelect)}`, {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(parsed.value),
+  });
+
+  if (!response.ok) {
+    return NextResponse.json(
+      { error: await errorFrom(response, "This department already exists.") },
+      { status: response.status },
+    );
+  }
+
+  const rows = (await response.json()) as StoredDepartment[];
+  return NextResponse.json({ department: rows[0] }, { status: 201 });
+}
+
 export async function POST(request: Request) {
   try {
-    const parsed = parseTransaction((await request.json()) as TransactionInput);
+    const input = (await request.json()) as FinanceInput;
+    if (input.kind === "department") return await createDepartment(input);
+
+    const parsed = parseTransaction(input);
     if ("error" in parsed) return NextResponse.json(parsed, { status: 400 });
 
     const response = await requestSupabase(`cash_transactions?select=${encodeURIComponent(transactionSelect)}`, {
