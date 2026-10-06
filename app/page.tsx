@@ -167,8 +167,8 @@ export default function Home(){
       <div className="page">
         {loading&&<div className="loading-line"/>}
         {active==="Dashboard"&&<Dashboard transactions={transactions} settings={settings} go={go}/>}
-        {active==="Cash In"&&<EntryPage type="Cash In" settings={settings} transactions={transactions} departments={departments} onAddDepartment={addDepartment} onSave={saveTransaction}/>}
-        {active==="Cash Out"&&<EntryPage type="Cash Out" settings={settings} transactions={transactions} departments={departments} onAddDepartment={addDepartment} onSave={saveTransaction}/>}
+        {active==="Cash In"&&<EntryPage type="Cash In" settings={settings} transactions={transactions} departments={departments} onAddDepartment={addDepartment} onSave={saveTransaction} onDelete={deleteTransaction}/>}
+        {active==="Cash Out"&&<EntryPage type="Cash Out" settings={settings} transactions={transactions} departments={departments} onAddDepartment={addDepartment} onSave={saveTransaction} onDelete={deleteTransaction}/>}
         {active==="Transactions"&&<TransactionsPage transactions={transactions} settings={settings} departments={departments} onSave={saveTransaction} onDelete={deleteTransaction}/>}
         {active==="Reports"&&<Reports transactions={transactions} settings={settings}/>}
       </div>
@@ -218,13 +218,17 @@ function Metric({label,value,tone,icon,note,featured=false}:{label:string;value:
 function PanelHead({title,subtitle,action}:{title:string;subtitle:string;action?:React.ReactNode}){ return <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div>{action}</div>; }
 function SummaryCard({title,data,total,symbol,tone}:{title:string;data:[string,number][];total:number;symbol:string;tone:string}){return <article className="panel summary-card"><PanelHead title={title} subtitle="Selected reporting period"/><div className="summary-bars">{data.length?data.map(([name,value])=><div key={name}><span><strong>{name}</strong><b>{money(value,symbol)}</b></span><i><em className={tone} style={{width:`${Math.max(7,value/Math.max(total,1)*100)}%`}}/></i></div>):<Empty message="No transactions in this period."/>}</div></article>}
 
-function EntryPage({type,settings,transactions,departments,onAddDepartment,onSave}:{type:TxType;settings:Settings;transactions:Transaction[];departments:string[];onAddDepartment:(name:string)=>Promise<string|null>;onSave:(tx:Omit<Transaction,"id">)=>Promise<boolean>}){
+function EntryPage({type,settings,transactions,departments,onAddDepartment,onSave,onDelete}:{type:TxType;settings:Settings;transactions:Transaction[];departments:string[];onAddDepartment:(name:string)=>Promise<string|null>;onSave:(tx:Omit<Transaction,"id">,id?:number)=>Promise<boolean>;onDelete:(id:number)=>void}){
   const categories=categoriesFor(type,departments);
   const [category,setCategory]=useState("");
   const [newDepartment,setNewDepartment]=useState("");
   const [addingDepartment,setAddingDepartment]=useState(false);
   const [departmentMessage,setDepartmentMessage]=useState("");
+  const [entrySearch,setEntrySearch]=useState("");
+  const [editing,setEditing]=useState<Transaction|null>(null);
   const suggestions=useMemo(()=>({from:uniqueSuggestions(transactions.filter(t=>t.type==="Cash In").map(t=>t.from)),to:uniqueSuggestions(transactions.filter(t=>t.type==="Cash Out").map(t=>t.to))}),[transactions]);
+  const entries=useMemo(()=>transactions.filter(t=>t.type===type).sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id),[transactions,type]);
+  const matchingEntries=useMemo(()=>entries.filter(t=>`${t.voucher??""} ${t.date} ${t.category} ${t.amount} ${t.from} ${t.to} ${t.description}`.toLowerCase().includes(entrySearch.trim().toLowerCase())),[entries,entrySearch]);
   async function addNewDepartment(){
     const name=newDepartment.trim();
     if(!name){setDepartmentMessage("Enter a department name first.");return;}
@@ -243,6 +247,8 @@ function EntryPage({type,settings,transactions,departments,onAddDepartment,onSav
       <label className="wide">Description / Remarks<textarea name="description" rows={4} placeholder="Add optional details about this transaction"/></label></div>
       <datalist id="cash-in-source-suggestions">{suggestions.from.map(value=><option key={value} value={value}/>)}</datalist><datalist id="cash-out-recipient-suggestions">{suggestions.to.map(value=><option key={value} value={value}/>)}</datalist>
       <div className="form-actions"><button type="reset" className="secondary" onClick={()=>{setCategory("");setNewDepartment("");setDepartmentMessage("")}}>Clear Form</button><button className={`primary ${type==="Cash Out"?"danger":""}`}>Save {type}</button></div></form></section>
+    <section className="panel entry-records"><div className="entry-records-head"><div><h2>Saved {type} entries</h2><p>{entrySearch?`${matchingEntries.length} of ${entries.length} entries shown`:`${entries.length} ${entries.length===1?"entry":"entries"} · Edit or delete a record if you made a mistake.`}</p></div><label className="search" aria-label={`Search ${type} entries`}>⌕<input value={entrySearch} onChange={e=>setEntrySearch(e.target.value)} placeholder="Search saved entries"/></label></div><TransactionTable rows={matchingEntries} symbol={settings.currencySymbol} showVoucher={type==="Cash Out"} showType={false} emptyMessage={entrySearch?`No ${type} entries match your search.`:`No ${type} entries saved yet.`} onEdit={setEditing} onDelete={onDelete}/></section>
+    {editing&&<EditModal tx={editing} settings={settings} transactions={transactions} departments={departments} lockType close={()=>setEditing(null)} save={async tx=>{if(await onSave(tx,editing.id))setEditing(null)}}/>}
   </>;
 }
 
@@ -253,9 +259,11 @@ function TransactionsPage({transactions,settings,departments,onSave,onDelete}:{t
   return <><PageHeading eyebrow="CASH BOOK" title="Transactions" description={`${rows.length} of ${transactions.length} records shown`}/><section className="panel data-panel"><div className="filters"><label className="search">⌕<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Voucher, category, or description"/></label><select value={type} onChange={e=>setType(e.target.value)}><option>All</option><option>Cash In</option><option>Cash Out</option></select><select value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{categories.map(c=><option key={c}>{c}</option>)}</select><label className="mini-label">From<input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label className="mini-label">To<input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label></div><TransactionTable rows={rows} symbol={settings.currencySymbol} onEdit={setEditing} onDelete={onDelete}/></section>{editing&&<EditModal tx={editing} settings={settings} transactions={transactions} departments={departments} close={()=>setEditing(null)} save={async tx=>{if(await onSave(tx,editing.id))setEditing(null)}}/>}</>;
 }
 
-function TransactionTable({rows,symbol,compact=false,onEdit,onDelete}:{rows:Transaction[];symbol:string;compact?:boolean;onEdit?:(t:Transaction)=>void;onDelete?:(id:number)=>void}){return <div className="table-wrap"><table><thead><tr><th>Voucher / Bill No.</th><th>Date</th><th>Type</th><th>Category</th><th>Amount</th>{!compact&&<><th>From</th><th>To</th><th>Description</th><th>Actions</th></>}</tr></thead><tbody>{rows.map(t=><tr key={t.id}><td><strong>{t.type==="Cash In"?"—":t.voucher||"—"}</strong></td><td>{dateLabel(t.date)}</td><td><span className={`type-pill ${t.type==="Cash In"?"in":"out"}`}>{t.type}</span></td><td>{t.category}</td><td className={t.type==="Cash In"?"amount-in":"amount-out"}>{t.type==="Cash In"?"+":"−"}{money(t.amount,symbol)}</td>{!compact&&<><td>{t.from||"—"}</td><td>{t.to||"—"}</td><td className="description-cell">{t.description||"—"}</td><td><div className="row-actions"><button onClick={()=>onEdit?.(t)}>Edit</button><button className="delete" onClick={()=>onDelete?.(t.id)}>Delete</button></div></td></>}</tr>)}</tbody></table>{!rows.length&&<Empty message="No transactions match these filters."/>}</div>}
+function TransactionTable({rows,symbol,compact=false,showVoucher=true,showType=true,emptyMessage="No transactions match these filters.",onEdit,onDelete}:{rows:Transaction[];symbol:string;compact?:boolean;showVoucher?:boolean;showType?:boolean;emptyMessage?:string;onEdit?:(t:Transaction)=>void;onDelete?:(id:number)=>void}){
+  return <div className="table-wrap"><table><thead><tr>{showVoucher&&<th>Voucher / Bill No.</th>}<th>Date</th>{showType&&<th>Type</th>}<th>Category</th><th>Amount</th>{!compact&&<><th>From</th><th>To</th><th>Description</th><th>Actions</th></>}</tr></thead><tbody>{rows.map(t=><tr key={t.id}>{showVoucher&&<td><strong>{t.type==="Cash In"?"—":t.voucher||"—"}</strong></td>}<td>{dateLabel(t.date)}</td>{showType&&<td><span className={`type-pill ${t.type==="Cash In"?"in":"out"}`}>{t.type}</span></td>}<td>{t.category}</td><td className={t.type==="Cash In"?"amount-in":"amount-out"}>{t.type==="Cash In"?"+":"−"}{money(t.amount,symbol)}</td>{!compact&&<><td>{t.from||"—"}</td><td>{t.to||"—"}</td><td className="description-cell">{t.description||"—"}</td><td><div className="row-actions"><button type="button" onClick={()=>onEdit?.(t)}>Edit</button><button type="button" className="delete" onClick={()=>onDelete?.(t.id)}>Delete</button></div></td></>}</tr>)}</tbody></table>{!rows.length&&<Empty message={emptyMessage}/>}</div>;
+}
 
-function EditModal({tx,settings,transactions,departments,close,save}:{tx:Transaction;settings:Settings;transactions:Transaction[];departments:string[];close:()=>void;save:(t:Omit<Transaction,"id">)=>void}){
+function EditModal({tx,settings,transactions,departments,lockType=false,close,save}:{tx:Transaction;settings:Settings;transactions:Transaction[];departments:string[];lockType?:boolean;close:()=>void;save:(t:Omit<Transaction,"id">)=>void}){
   const [type,setType]=useState<TxType>(tx.type);
   const suggestions=useMemo(()=>({
     from:uniqueSuggestions(transactions.filter(t=>t.type==="Cash In").map(t=>t.from)),
@@ -263,13 +271,13 @@ function EditModal({tx,settings,transactions,departments,close,save}:{tx:Transac
   }),[transactions]);
   return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}>
     <form className="modal" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);save({voucher:type==="Cash Out"?String(f.get("voucher")):null,date:String(f.get("date")),type,category:String(f.get("category")),amount:Number(f.get("amount")),from:type==="Cash In"?String(f.get("from")):"",to:type==="Cash Out"?String(f.get("to")):"",description:String(f.get("description"))})}}>
-      <div className="modal-head"><div><span className="eyebrow">EDIT RECORD</span><h2>Update transaction</h2></div><button type="button" onClick={close}>×</button></div>
+      <div className="modal-head"><div><span className="eyebrow">EDIT RECORD</span><h2>{lockType?`Update ${type} entry`:"Update transaction"}</h2></div><button type="button" onClick={close} aria-label="Close edit form">×</button></div>
       <div className="form-grid">
         {type==="Cash Out"&&<label>Voucher / Bill Number *<input name="voucher" required defaultValue={tx.voucher||""}/></label>}
         <label>Date *<input name="date" type="date" required defaultValue={tx.date}/></label>
-        <label>Type *<select value={type} onChange={e=>setType(e.target.value as TxType)}><option>Cash In</option><option>Cash Out</option></select></label>
+        {!lockType&&<label>Type *<select value={type} onChange={e=>setType(e.target.value as TxType)}><option>Cash In</option><option>Cash Out</option></select></label>}
         <label>Category *<select name="category" defaultValue={tx.category}>{categoriesFor(type,departments).map(c=><option key={c}>{c}</option>)}</select></label>
-        <label>Amount ({settings.currencySymbol}) *<input name="amount" type="number" min="1" required defaultValue={tx.amount}/></label>
+        <label>Amount ({settings.currencySymbol}) *<input name="amount" type="number" min="0.01" step="0.01" required defaultValue={tx.amount}/></label>
         {type==="Cash In"
           ? <label>From *<input name="from" list="edit-cash-in-source-suggestions" required defaultValue={tx.from}/></label>
           : <label>To / Paid To *<input name="to" list="edit-cash-out-recipient-suggestions" required defaultValue={tx.to}/></label>}
