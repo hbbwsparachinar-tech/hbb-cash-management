@@ -117,3 +117,11 @@ body{font-size:14px;line-height:1.4}
 }
 @media(max-width:380px){.metric>strong{font-size:14px}.transaction-card-main{flex-wrap:wrap}.transaction-card-amount{margin-left:auto}.report-totals{grid-template-columns:1fr}.report-nav{grid-template-columns:1fr}.filters{grid-template-columns:1fr}}
 @media print{.transaction-card-view{display:none!important}.transaction-table-view{display:block!important}.transaction-table-view table{width:100%;min-width:0;table-layout:fixed}.transaction-table-view th,.transaction-table-view td{white-space:normal;overflow-wrap:anywhere}.report-sheet{padding:0}.reports-layout{display:block}}
+
+/* Official hospital identity */
+.brand-mark,.auth-mark{flex:0 0 auto;overflow:hidden;background:#fff;border-radius:50%;padding:2px;display:grid;place-items:center}
+.brand-mark{width:48px;height:48px;box-shadow:0 4px 12px #3d091255}
+.auth-mark{width:68px;height:68px;box-shadow:0 8px 20px #8e24352e}
+.brand-mark img,.auth-mark img{display:block;width:100%;height:100%;object-fit:contain;border-radius:50%}
+.brand strong{max-width:126px}
+.auth-loading .auth-mark{margin-inline:auto}

@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { getBrowserSupabaseClient } from "../lib/supabase-browser";
 
 type TxType = "Cash In" | "Cash Out";
@@ -157,7 +158,7 @@ export default function Home(){
 
   return <main className="app-shell">
     <aside className={`sidebar ${menuOpen?"open":""}`}>
-      <div className="brand"><span className="brand-mark">H+</span><span><strong>{settings.hospitalName}</strong><small>Cash Management</small></span></div>
+      <div className="brand"><HospitalLogo className="brand-mark"/><span><strong>{settings.hospitalName}</strong><small>Cash Management</small></span></div>
       <nav aria-label="Main navigation">{navItems.map(item=><button key={item} className={active===item?"active":""} onClick={()=>go(item)}><span>{icon[item]}</span>{item}</button>)}</nav>
       <footer><span className="status-dot"/> Data saved securely</footer>
     </aside>
@@ -177,13 +178,17 @@ export default function Home(){
   </main>;
 }
 
-function AuthLoading(){return <main className="auth-shell"><section className="auth-card auth-loading"><span className="auth-mark">H+</span><p>Checking your secure session…</p></section></main>;}
+function HospitalLogo({className}:{className:"brand-mark"|"auth-mark"}){
+  return <span className={className}><Image src="/hbb-logo.jpg" alt="Haidri Blood Bank & Welfare Society logo" width={64} height={65} sizes="64px" priority/></span>;
+}
+
+function AuthLoading(){return <main className="auth-shell"><section className="auth-card auth-loading"><HospitalLogo className="auth-mark"/><p>Checking your secure session…</p></section></main>;}
 
 function LoginPage({message,signingIn,onSignIn}:{message:string;signingIn:boolean;onSignIn:(email:string,password:string)=>Promise<void>}){
   const [email,setEmail]=useState("");
   const [password,setPassword]=useState("");
   async function submit(event:FormEvent<HTMLFormElement>){event.preventDefault();await onSignIn(email.trim(),password);}
-  return <main className="auth-shell"><section className="auth-card"><div className="auth-brand"><span className="auth-mark">H+</span><div><strong>HBB Hospital</strong><small>Cash Management</small></div></div><div className="auth-copy"><span className="eyebrow">SECURE ACCESS</span><h1>Sign in to continue</h1><p>Use your hospital account to access the cash book and reports.</p></div><form onSubmit={submit}><label>Email address<input type="email" autoComplete="email" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@hospital.org"/></label><label>Password<input type="password" autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} required placeholder="Enter your password"/></label>{message&&<p className="auth-error" role="alert">{message}</p>}<button className="primary auth-submit" disabled={signingIn}>{signingIn?"Signing in…":"Sign in"}</button></form><p className="auth-note">For account access, contact the hospital administrator.</p></section></main>;
+  return <main className="auth-shell"><section className="auth-card"><div className="auth-brand"><HospitalLogo className="auth-mark"/><div><strong>HBB Hospital</strong><small>Cash Management</small></div></div><div className="auth-copy"><span className="eyebrow">SECURE ACCESS</span><h1>Sign in to continue</h1><p>Use your hospital account to access the cash book and reports.</p></div><form onSubmit={submit}><label>Email address<input type="email" autoComplete="email" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@hospital.org"/></label><label>Password<input type="password" autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} required placeholder="Enter your password"/></label>{message&&<p className="auth-error" role="alert">{message}</p>}<button className="primary auth-submit" disabled={signingIn}>{signingIn?"Signing in…":"Sign in"}</button></form><p className="auth-note">For account access, contact the hospital administrator.</p></section></main>;
 }
 
 function PageHeading({eyebrow,title,description,action}:{eyebrow:string;title:string;description:string;action?:React.ReactNode}){
