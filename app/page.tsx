@@ -1,8 +1,9 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { getBrowserSupabaseClient } from "../lib/supabase-browser";
+import { clearBrowserSupabaseSession, getBrowserSupabaseClient } from "../lib/supabase-browser";
+import { SESSION_IDLE_TIMEOUT_MS, beginSession, clearSessionActivity, readSessionActivity, recordSessionActivity, sessionExpiry, type SessionExpiryReason } from "../lib/session-policy";
 
 type TxType = "Cash In" | "Cash Out";
 type Transaction = { id:number; voucher:string|null; date:string; type:TxType; category:string; amount:number; from:string; to:string; description:string };
@@ -23,6 +24,12 @@ const dateLabel = (date:string) => new Date(`${date}T00:00:00`).toLocaleDateStri
 const icon:Record<string,string> = { Dashboard:"⌂", "Cash In":"↓", "Cash Out":"↑", Transactions:"↔", Reports:"▥" };
 const navItems = Object.keys(icon);
 
+function sessionMessage(reason:SessionExpiryReason){
+  if(reason==="idle")return `Your session ended after ${SESSION_IDLE_TIMEOUT_MS/60_000} minutes of inactivity. Please sign in again.`;
+  if(reason==="new-day")return "A new hospital day has started. Please sign in again.";
+  return "For security, please sign in again.";
+}
+
 export default function Home(){
   const supabase=useMemo(()=>getBrowserSupabaseClient(),[]);
   const [active,setActive] = useState("Dashboard");
@@ -37,20 +44,45 @@ export default function Home(){
   const [userEmail,setUserEmail]=useState("");
   const [authMessage,setAuthMessage]=useState(supabase?"":"Login has not been configured yet. Add the public Supabase URL and publishable key in Vercel.");
   const [signingIn,setSigningIn]=useState(false);
+  const signingOut=useRef<Promise<void>|null>(null);
+
+  const endSession=useCallback((message="")=>{
+    if(signingOut.current)return signingOut.current;
+    clearSessionActivity();
+    setAccessToken(null);setUserEmail("");setTransactions(initialTransactions);setDepartments([]);setActive("Dashboard");setLoading(false);setAuthReady(true);setAuthMessage(message);
+    const pending=(async()=>{
+      try { await supabase?.auth.signOut({scope:"local"}); }
+      catch { /* The stored browser token is still cleared below. */ }
+      finally { clearBrowserSupabaseSession(); signingOut.current=null; }
+    })();
+    signingOut.current=pending;
+    return pending;
+  },[supabase]);
 
   useEffect(()=>{
     if(!supabase)return;
-    let current=true;
+    let current=true,restored=false;
     void supabase.auth.getSession().then(({data,error})=>{
       if(!current)return;
-      if(error)setAuthMessage(error.message);
+      restored=true;
+      if(error){void endSession("Your sign-in session could not be checked. Please sign in again.");return;}
+      const reason=data.session?sessionExpiry(readSessionActivity()):null;
+      if(reason){void endSession(sessionMessage(reason));return;}
+      if(!data.session)clearSessionActivity();
       setAccessToken(data.session?.access_token??null);
       setUserEmail(data.session?.user.email??"");
       setLoading(Boolean(data.session));
       setAuthReady(true);
-    }).catch(()=>{if(current){setAuthMessage("Your sign-in session could not be checked. Please try again.");setAuthReady(true);}});
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,session)=>{
-      if(!current)return;
+    }).catch(()=>{if(current){restored=true;void endSession("Your sign-in session could not be checked. Please sign in again.");}});
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((event,session)=>{
+      if(!current||!restored)return;
+      if(event==="SIGNED_OUT"){
+        clearSessionActivity();setAccessToken(null);setUserEmail("");setLoading(false);return;
+      }
+      if(session){
+        const reason=sessionExpiry(readSessionActivity());
+        if(reason){window.setTimeout(()=>{if(current)void endSession(sessionMessage(reason));},0);return;}
+      }
       setAccessToken(session?.access_token??null);
       setUserEmail(session?.user.email??"");
       setLoading(Boolean(session));
@@ -58,20 +90,57 @@ export default function Home(){
       setAuthReady(true);
     });
     return ()=>{current=false;subscription.unsubscribe();};
-  },[supabase]);
+  },[supabase,endSession]);
+
+  useEffect(()=>{
+    if(!accessToken)return;
+    let lastActivityCheck=0;
+    const checkSession=()=>{
+      const reason=sessionExpiry(readSessionActivity());
+      if(reason)void endSession(sessionMessage(reason));
+      return Boolean(reason);
+    };
+    const activity=()=>{
+      const now=Date.now();
+      if(now-lastActivityCheck<1_000)return;
+      lastActivityCheck=now;
+      if(!checkSession())recordSessionActivity(now);
+    };
+    const visible=()=>{if(document.visibilityState==="visible")checkSession();};
+    window.addEventListener("pointerdown",activity);
+    window.addEventListener("keydown",activity);
+    window.addEventListener("scroll",activity,{passive:true});
+    window.addEventListener("focus",checkSession);
+    document.addEventListener("visibilitychange",visible);
+    const interval=window.setInterval(checkSession,15_000);
+    checkSession();
+    return ()=>{
+      window.removeEventListener("pointerdown",activity);
+      window.removeEventListener("keydown",activity);
+      window.removeEventListener("scroll",activity);
+      window.removeEventListener("focus",checkSession);
+      document.removeEventListener("visibilitychange",visible);
+      window.clearInterval(interval);
+    };
+  },[accessToken,endSession]);
 
   function flash(message:string){ setNotice(message); window.setTimeout(()=>setNotice(""),2600); }
   function go(page:string){ setActive(page); setMenuOpen(false); window.scrollTo({top:0,behavior:"smooth"}); }
 
-  async function responseError(response:Response, fallback:string){
-    try{const data=await response.json() as {error?:string};return data.error||fallback;}catch{return fallback;}
-  }
+  const responseError=useCallback(async (response:Response, fallback:string)=>{
+    let message=fallback;
+    try{const data=await response.json() as {error?:string};message=data.error||fallback;}catch{ /* Use the fallback message. */ }
+    if(response.status===401)await endSession(message);
+    return message;
+  },[endSession]);
 
   const apiHeaders=useCallback((json=false)=>{
-    const headers:Record<string,string>={authorization:`Bearer ${accessToken??""}`};
+    const reason=sessionExpiry(readSessionActivity());
+    if(reason)void endSession(sessionMessage(reason));
+    const headers:Record<string,string>={authorization:`Bearer ${reason?"":accessToken??""}`};
     if(json)headers["content-type"]="application/json";
     return headers;
-  },[accessToken]);
+  },[accessToken,endSession]);
 
   useEffect(()=>{
     if(!accessToken)return;
@@ -86,23 +155,25 @@ export default function Home(){
       if(data.departments)setDepartments(data.departments);
     }).catch(error=>{if(current)flash(error instanceof Error?error.message:"Could not load the cash records.");}).finally(()=>{if(current)setLoading(false);});
     return ()=>{current=false;};
-  },[accessToken,apiHeaders]);
+  },[accessToken,apiHeaders,responseError]);
 
   async function signIn(email:string,password:string){
     if(!supabase){setAuthMessage("Login has not been configured yet. Please check the Vercel environment variables.");return;}
     setSigningIn(true);setAuthMessage("");
-    const {data,error}=await supabase.auth.signInWithPassword({email,password});
-    setSigningIn(false);
-    if(error){setAuthMessage(error.message);return;}
-    setAccessToken(data.session?.access_token??null);
-    setUserEmail(data.user?.email??"");
-    setLoading(Boolean(data.session));
+    try{
+      await signingOut.current;
+      beginSession();
+      const {data,error}=await supabase.auth.signInWithPassword({email,password});
+      if(error||!data.session){clearSessionActivity();setAuthMessage(error?.message??"Sign-in could not be completed. Please try again.");return;}
+      setAccessToken(data.session.access_token);
+      setUserEmail(data.user?.email??"");
+      setLoading(true);
+    }catch{
+      clearSessionActivity();setAuthMessage("Sign-in could not be completed. Please try again.");
+    }finally{setSigningIn(false);}
   }
 
-  async function signOut(){
-    await supabase?.auth.signOut();
-    setAccessToken(null);setUserEmail("");setTransactions(initialTransactions);setDepartments([]);setActive("Dashboard");setLoading(false);
-  }
+  async function signOut(){await endSession();}
 
   async function saveTransaction(tx:Omit<Transaction,"id">, id?:number){
     const duplicate=Boolean(tx.voucher)&&transactions.some(t=>t.voucher?.toLowerCase()===tx.voucher?.toLowerCase()&&t.id!==id);
@@ -164,7 +235,7 @@ export default function Home(){
     </aside>
     {menuOpen&&<button className="mobile-scrim" aria-label="Close navigation" onClick={()=>setMenuOpen(false)}/>}
     <section className="content">
-      <header className="topbar"><button className="menu-button" onClick={()=>setMenuOpen(!menuOpen)} aria-label="Open navigation">☰</button><div><small>Hospital Cash Management</small><strong>{active}</strong></div><div className="topbar-account"><span>Signed in</span><strong>{userEmail||"Hospital account"}</strong></div><button className="logout-button" onClick={signOut}>Sign out</button><div className="top-date"><span>Today</span><strong>{new Date().toLocaleDateString("en-PK",{day:"2-digit",month:"long",year:"numeric"})}</strong></div></header>
+      <header className="topbar"><button className="menu-button" onClick={()=>setMenuOpen(!menuOpen)} aria-label="Open navigation">☰</button><div><small>Hospital Cash Management</small><strong>{active}</strong></div><div className="topbar-account"><span>Signed in</span><strong>{userEmail||"Hospital account"}</strong></div><button className="logout-button" onClick={()=>void signOut()}>Sign out</button><div className="top-date"><span>Today</span><strong>{new Date().toLocaleDateString("en-PK",{day:"2-digit",month:"long",year:"numeric"})}</strong></div></header>
       <div className="page">
         {loading&&<div className="loading-line"/>}
         {active==="Dashboard"&&<Dashboard transactions={transactions} settings={settings} go={go}/>}

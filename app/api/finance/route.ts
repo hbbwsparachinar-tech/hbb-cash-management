@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { hospitalDay } from "../../../lib/session-policy";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -83,6 +84,9 @@ async function authenticationError(request: Request) {
 
     if (error || !data.user) {
       return NextResponse.json({ error: "Your session has expired. Please sign in again." }, { status: 401 });
+    }
+    if (!data.user.last_sign_in_at || hospitalDay(data.user.last_sign_in_at) !== hospitalDay(Date.now())) {
+      return NextResponse.json({ error: "A new hospital day has started. Please sign in again." }, { status: 401 });
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "The authentication service could not be reached.";
